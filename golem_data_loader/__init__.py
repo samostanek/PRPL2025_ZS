@@ -11,6 +11,11 @@ from .golem_data_loader import (
     # Data structures
     FastSpectrometryData,
     MiniSpectrometerData,
+    BasicDiagnosticsData,
+    MirnovCoilsData,
+    MHDRingData,
+    PlasmaDetectionData,
+    ShotInfo,
     LoaderConfig,
     # Enums
     SpectroscopyLine,
@@ -23,12 +28,23 @@ from .golem_data_loader import (
     load_shot_data,
 )
 
-__version__ = "1.0.0"
+# Plotting utilities (optional import)
+try:
+    from . import plotting
+except ImportError:
+    plotting = None  # matplotlib not installed
+
+__version__ = "1.2.0"
 
 __all__ = [
     "GolemDataLoader",
     "FastSpectrometryData",
     "MiniSpectrometerData",
+    "BasicDiagnosticsData",
+    "MirnovCoilsData",
+    "MHDRingData",
+    "PlasmaDetectionData",
+    "ShotInfo",
     "LoaderConfig",
     "SpectroscopyLine",
     "DataLoadError",

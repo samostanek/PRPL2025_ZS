@@ -120,6 +120,91 @@ class MiniSpectrometerData:
 
 
 @dataclass
+class BasicDiagnosticsData:
+    """Container for basic diagnostics data.
+
+    Attributes:
+        toroidal_field: Bt - Toroidal magnetic field (T) vs time (s)
+        plasma_current: Ip - Plasma current (kA) vs time (s)
+        chamber_current: Ich - Chamber current (A) vs time (s)
+        loop_voltage: U_loop - Loop voltage (V) vs time (s)
+        raw_dataframes: Dictionary of original DataFrames
+    """
+
+    toroidal_field: Optional[FastSpectrometryData] = None
+    plasma_current: Optional[FastSpectrometryData] = None
+    chamber_current: Optional[FastSpectrometryData] = None
+    loop_voltage: Optional[FastSpectrometryData] = None
+    raw_dataframes: Dict[str, pd.DataFrame] = field(default_factory=dict)
+
+
+@dataclass
+class MirnovCoilsData:
+    """Container for Mirnov coils data.
+
+    Attributes:
+        coils: Dictionary mapping coil numbers to signal data
+        raw_dataframes: Dictionary of original DataFrames
+    """
+
+    coils: Dict[int, FastSpectrometryData] = field(default_factory=dict)
+    raw_dataframes: Dict[str, pd.DataFrame] = field(default_factory=dict)
+
+
+@dataclass
+class MHDRingData:
+    """Container for MHD ring data.
+
+    Attributes:
+        rings: Dictionary mapping ring numbers to signal data
+        raw_dataframes: Dictionary of original DataFrames
+    """
+
+    rings: Dict[int, FastSpectrometryData] = field(default_factory=dict)
+    raw_dataframes: Dict[str, pd.DataFrame] = field(default_factory=dict)
+
+
+@dataclass
+class PlasmaDetectionData:
+    """Container for plasma detection signals.
+
+    Attributes:
+        bt_coil: Toroidal field coil signal
+        int_bt_coil: Integrated toroidal field coil signal
+        rog_coil: Rogowski coil signal
+        int_rog_coil: Integrated Rogowski coil signal
+        leyb_phot: Leybold photocell signal
+        loop: Loop signal
+        raw_dataframes: Dictionary of original DataFrames
+    """
+
+    bt_coil: Optional[FastSpectrometryData] = None
+    int_bt_coil: Optional[FastSpectrometryData] = None
+    rog_coil: Optional[FastSpectrometryData] = None
+    int_rog_coil: Optional[FastSpectrometryData] = None
+    leyb_phot: Optional[FastSpectrometryData] = None
+    loop: Optional[FastSpectrometryData] = None
+    raw_dataframes: Dict[str, pd.DataFrame] = field(default_factory=dict)
+
+
+@dataclass
+class ShotInfo:
+    """Container for shot metadata and information.
+
+    Attributes:
+        shot_number: GOLEM shot number
+        logbook: Raw logbook text
+        available_diagnostics: Dictionary of diagnostic availability
+        timestamp: Shot timestamp if available
+    """
+
+    shot_number: int
+    logbook: Optional[str] = None
+    available_diagnostics: Dict[str, bool] = field(default_factory=dict)
+    timestamp: Optional[str] = None
+
+
+@dataclass
 class LoaderConfig:
     """Configuration for the GOLEM data loader.
 
@@ -415,6 +500,595 @@ class GolemDataLoader:
                 raise
             raise DataLoadError(f"Failed to load mini-spectrometer H5 data: {e}") from e
 
+    def load_basic_diagnostics(self) -> BasicDiagnosticsData:
+        """
+        Load basic diagnostics data (Bt, Ip, Ich, U_loop).
+
+        Returns:
+            BasicDiagnosticsData object with available signals
+
+        Example:
+            >>> loader = GolemDataLoader(50377)
+            >>> basic = loader.load_basic_diagnostics()
+            >>> if basic.plasma_current:
+            ...     print(basic.plasma_current.time.shape)
+        """
+        result = BasicDiagnosticsData()
+        base_path = f"{self.base_url}BasicDiagnostics/Results/"
+
+        signals = {
+            "Bt": ("toroidal_field", "Toroidal Field"),
+            "Ip": ("plasma_current", "Plasma Current"),
+            "Ich": ("chamber_current", "Chamber Current"),
+            "U_loop": ("loop_voltage", "Loop Voltage"),
+        }
+
+        for filename, (attr_name, display_name) in signals.items():
+            try:
+                url = f"{base_path}{filename}.csv"
+                csv_data = self._fetch_url_with_retry(
+                    url, f"BasicDiagnostics/{filename}"
+                )
+
+                from io import BytesIO
+
+                df = pd.read_csv(BytesIO(csv_data))
+
+                if df.shape[1] >= 2:
+                    signal_data = FastSpectrometryData(
+                        label=display_name,
+                        time=df.iloc[:, 0].values,
+                        intensity=df.iloc[:, 1].values,
+                        raw_dataframe=df,
+                    )
+                    setattr(result, attr_name, signal_data)
+                    result.raw_dataframes[filename] = df
+                    logger.info(f"Loaded {filename}: {df.shape[0]} points")
+
+            except (FileNotFoundError, NetworkError) as e:
+                logger.debug(f"{filename} not available: {e}")
+            except Exception as e:
+                logger.warning(f"Failed to load {filename}: {e}")
+
+        return result
+
+    def load_mirnov_coils(self) -> MirnovCoilsData:
+        """
+        Load Limiter Mirnov Coils data.
+
+        Returns:
+            MirnovCoilsData object with available coil signals
+
+        Example:
+            >>> loader = GolemDataLoader(50377)
+            >>> mirnov = loader.load_mirnov_coils()
+            >>> for coil_num, data in mirnov.coils.items():
+            ...     print(f"Coil {coil_num}: {len(data.time)} points")
+        """
+        result = MirnovCoilsData()
+        base_path = f"{self.base_url}LimiterMirnovCoils/"
+
+        # Typical coil numbers (1, 5, 9, 13)
+        for coil_num in [1, 5, 9, 13]:
+            try:
+                filename = f"U_mc{coil_num}.csv"
+                url = f"{base_path}{filename}"
+                csv_data = self._fetch_url_with_retry(url, f"Mirnov Coil {coil_num}")
+
+                from io import BytesIO
+
+                df = pd.read_csv(BytesIO(csv_data))
+
+                if df.shape[1] >= 2:
+                    signal_data = FastSpectrometryData(
+                        label=f"Mirnov Coil {coil_num}",
+                        time=df.iloc[:, 0].values,
+                        intensity=df.iloc[:, 1].values,
+                        raw_dataframe=df,
+                    )
+                    result.coils[coil_num] = signal_data
+                    result.raw_dataframes[f"mc{coil_num}"] = df
+                    logger.info(f"Loaded Mirnov Coil {coil_num}: {df.shape[0]} points")
+
+            except (FileNotFoundError, NetworkError):
+                logger.debug(f"Mirnov Coil {coil_num} not available")
+            except Exception as e:
+                logger.warning(f"Failed to load Mirnov Coil {coil_num}: {e}")
+
+        return result
+
+    def load_mhd_ring(self) -> MHDRingData:
+        """
+        Load MHD ring data.
+
+        Returns:
+            MHDRingData object with available ring signals
+
+        Example:
+            >>> loader = GolemDataLoader(50377)
+            >>> mhd = loader.load_mhd_ring()
+            >>> for ring_num, data in mhd.rings.items():
+            ...     print(f"Ring {ring_num}: {len(data.time)} points")
+        """
+        result = MHDRingData()
+        base_path = f"{self.base_url}MHDring-TM/"
+
+        for ring_num in range(1, 6):  # Rings 1-5
+            try:
+                filename = f"ring_{ring_num}.csv"
+                url = f"{base_path}{filename}"
+                csv_data = self._fetch_url_with_retry(url, f"MHD Ring {ring_num}")
+
+                from io import BytesIO
+
+                df = pd.read_csv(BytesIO(csv_data))
+
+                if df.shape[1] >= 2:
+                    signal_data = FastSpectrometryData(
+                        label=f"MHD Ring {ring_num}",
+                        time=df.iloc[:, 0].values,
+                        intensity=df.iloc[:, 1].values,
+                        raw_dataframe=df,
+                    )
+                    result.rings[ring_num] = signal_data
+                    result.raw_dataframes[f"ring_{ring_num}"] = df
+                    logger.info(f"Loaded MHD Ring {ring_num}: {df.shape[0]} points")
+
+            except (FileNotFoundError, NetworkError):
+                logger.debug(f"MHD Ring {ring_num} not available")
+            except Exception as e:
+                logger.warning(f"Failed to load MHD Ring {ring_num}: {e}")
+
+        return result
+
+    def load_plasma_detection(self) -> PlasmaDetectionData:
+        """
+        Load plasma detection signals.
+
+        Returns:
+            PlasmaDetectionData object with available signals
+
+        Example:
+            >>> loader = GolemDataLoader(50377)
+            >>> plasma_det = loader.load_plasma_detection()
+            >>> if plasma_det.rog_coil:
+            ...     print(plasma_det.rog_coil.time.shape)
+        """
+        result = PlasmaDetectionData()
+        base_path = f"{self.base_url}PlasmaDetection/"
+
+        signals = {
+            "U_BtCoil": ("bt_coil", "BT Coil"),
+            "U_IntBtCoil": ("int_bt_coil", "Integrated BT Coil"),
+            "U_RogCoil": ("rog_coil", "Rogowski Coil"),
+            "U_IntRogCoil": ("int_rog_coil", "Integrated Rogowski Coil"),
+            "U_LeybPhot": ("leyb_phot", "Leybold Photocell"),
+            "U_Loop": ("loop", "Loop"),
+        }
+
+        for filename, (attr_name, display_name) in signals.items():
+            try:
+                url = f"{base_path}{filename}.csv"
+                csv_data = self._fetch_url_with_retry(
+                    url, f"PlasmaDetection/{filename}"
+                )
+
+                from io import BytesIO
+
+                df = pd.read_csv(BytesIO(csv_data))
+
+                if df.shape[1] >= 2:
+                    signal_data = FastSpectrometryData(
+                        label=display_name,
+                        time=df.iloc[:, 0].values,
+                        intensity=df.iloc[:, 1].values,
+                        raw_dataframe=df,
+                    )
+                    setattr(result, attr_name, signal_data)
+                    result.raw_dataframes[filename] = df
+                    logger.info(f"Loaded {filename}: {df.shape[0]} points")
+
+            except (FileNotFoundError, NetworkError):
+                logger.debug(f"{filename} not available")
+            except Exception as e:
+                logger.warning(f"Failed to load {filename}: {e}")
+
+        return result
+
+    def load_shot_info(self) -> ShotInfo:
+        """
+        Load shot information and logbook.
+
+        Returns:
+            ShotInfo object with logbook and available diagnostics
+
+        Example:
+            >>> loader = GolemDataLoader(50377)
+            >>> info = loader.load_shot_info()
+            >>> print(info.logbook[:200])
+        """
+        result = ShotInfo(shot_number=self.shot_number)
+
+        # Load logbook
+        try:
+            url = f"http://golem.fjfi.cvut.cz/shots/{self.shot_number}/ShotLogbook"
+            logbook_data = self._fetch_url_with_retry(url, "Shot logbook")
+            result.logbook = logbook_data.decode("utf-8", errors="replace")
+            logger.info(f"Loaded logbook: {len(result.logbook)} characters")
+        except Exception as e:
+            logger.warning(f"Could not load logbook: {e}")
+
+        # Get available diagnostics
+        result.available_diagnostics = self.get_available_diagnostics()
+
+        return result
+
+    def load_all_diagnostics(self) -> Dict[str, Any]:
+        """
+        Load all available diagnostics for this shot.
+
+        Returns:
+            Dictionary containing all loaded diagnostic data
+
+        Example:
+            >>> loader = GolemDataLoader(50377)
+            >>> all_data = loader.load_all_diagnostics()
+            >>> print(all_data.keys())
+        """
+        all_data = {}
+
+        try:
+            all_data["basic"] = self.load_basic_diagnostics()
+        except Exception as e:
+            logger.error(f"Failed to load basic diagnostics: {e}")
+
+        try:
+            all_data["spectrometry"] = self.load_fast_spectrometry()
+        except Exception as e:
+            logger.error(f"Failed to load fast spectrometry: {e}")
+
+        try:
+            all_data["minispectrometer"] = self.load_minispectrometer_h5()
+        except Exception as e:
+            logger.error(f"Failed to load mini-spectrometer: {e}")
+
+        try:
+            all_data["mirnov"] = self.load_mirnov_coils()
+        except Exception as e:
+            logger.error(f"Failed to load Mirnov coils: {e}")
+
+        try:
+            all_data["mhd_ring"] = self.load_mhd_ring()
+        except Exception as e:
+            logger.error(f"Failed to load MHD ring: {e}")
+
+        try:
+            all_data["plasma_detection"] = self.load_plasma_detection()
+        except Exception as e:
+            logger.error(f"Failed to load plasma detection: {e}")
+
+        try:
+            all_data["info"] = self.load_shot_info()
+        except Exception as e:
+            logger.error(f"Failed to load shot info: {e}")
+
+        return all_data
+
+    def export_to_hdf5(
+        self,
+        output_path: str,
+        include_diagnostics: Optional[List[str]] = None,
+        compression: str = "gzip",
+        compression_opts: int = 4,
+    ) -> None:
+        """
+        Export all available diagnostics to a single HDF5 file.
+
+        Creates a well-organized HDF5 file with groups for each diagnostic type.
+        Includes metadata, timestamps, and all signal data.
+
+        Parameters
+        ----------
+        output_path : str
+            Path where the HDF5 file will be saved
+        include_diagnostics : list of str, optional
+            List of diagnostics to include. If None, includes all available.
+            Options: 'basic', 'spectrometry', 'minispectrometer', 'mirnov',
+                    'mhd_ring', 'plasma_detection', 'info'
+        compression : str, optional
+            HDF5 compression algorithm (default: 'gzip')
+        compression_opts : int, optional
+            Compression level 0-9 (default: 4)
+
+        Examples
+        --------
+        >>> loader = GolemDataLoader(50377)
+        >>> loader.export_to_hdf5('shot_50377_data.h5')
+        >>> # Export only specific diagnostics
+        >>> loader.export_to_hdf5('shot_50377_basic.h5',
+        ...                       include_diagnostics=['basic', 'spectrometry'])
+
+        Notes
+        -----
+        The HDF5 file structure:
+        /metadata/shot_number
+        /metadata/export_timestamp
+        /basic/plasma_current/{time, intensity}
+        /basic/toroidal_field/{time, intensity}
+        /spectrometry/Hα/{time, intensity}
+        /mhd_ring/ring_1/{time, intensity}
+        etc.
+        """
+        import datetime
+
+        logger.info(f"Exporting shot {self.shot_number} to HDF5: {output_path}")
+
+        # Determine which diagnostics to load
+        if include_diagnostics is None:
+            include_diagnostics = [
+                "basic",
+                "spectrometry",
+                "minispectrometer",
+                "mirnov",
+                "mhd_ring",
+                "plasma_detection",
+                "info",
+            ]
+
+        # Load diagnostics
+        all_data = {}
+        if "basic" in include_diagnostics:
+            try:
+                all_data["basic"] = self.load_basic_diagnostics()
+                logger.info("Loaded basic diagnostics")
+            except Exception as e:
+                logger.warning(f"Failed to load basic diagnostics: {e}")
+
+        if "spectrometry" in include_diagnostics:
+            try:
+                all_data["spectrometry"] = self.load_fast_spectrometry()
+                logger.info("Loaded fast spectrometry")
+            except Exception as e:
+                logger.warning(f"Failed to load fast spectrometry: {e}")
+
+        if "minispectrometer" in include_diagnostics:
+            try:
+                all_data["minispectrometer"] = self.load_minispectrometer_h5()
+                logger.info("Loaded mini-spectrometer")
+            except Exception as e:
+                logger.warning(f"Failed to load mini-spectrometer: {e}")
+
+        if "mirnov" in include_diagnostics:
+            try:
+                all_data["mirnov"] = self.load_mirnov_coils()
+                logger.info("Loaded Mirnov coils")
+            except Exception as e:
+                logger.warning(f"Failed to load Mirnov coils: {e}")
+
+        if "mhd_ring" in include_diagnostics:
+            try:
+                all_data["mhd_ring"] = self.load_mhd_ring()
+                logger.info("Loaded MHD ring")
+            except Exception as e:
+                logger.warning(f"Failed to load MHD ring: {e}")
+
+        if "plasma_detection" in include_diagnostics:
+            try:
+                all_data["plasma_detection"] = self.load_plasma_detection()
+                logger.info("Loaded plasma detection")
+            except Exception as e:
+                logger.warning(f"Failed to load plasma detection: {e}")
+
+        if "info" in include_diagnostics:
+            try:
+                all_data["info"] = self.load_shot_info()
+                logger.info("Loaded shot info")
+            except Exception as e:
+                logger.warning(f"Failed to load shot info: {e}")
+
+        # Create HDF5 file
+        with h5py.File(output_path, "w") as f:
+            # Metadata group
+            meta = f.create_group("metadata")
+            meta.attrs["shot_number"] = self.shot_number
+            meta.attrs["export_timestamp"] = datetime.datetime.now().isoformat()
+            meta.attrs["loader_version"] = "1.2.0"
+
+            # Basic diagnostics
+            if "basic" in all_data:
+                basic = all_data["basic"]
+                basic_grp = f.create_group("basic")
+
+                if basic.plasma_current is not None:
+                    ip_grp = basic_grp.create_group("plasma_current")
+                    ip_grp.create_dataset(
+                        "time",
+                        data=basic.plasma_current.time,
+                        compression=compression,
+                        compression_opts=compression_opts,
+                    )
+                    ip_grp.create_dataset(
+                        "intensity",
+                        data=basic.plasma_current.intensity,
+                        compression=compression,
+                        compression_opts=compression_opts,
+                    )
+                    ip_grp.attrs["label"] = "Plasma Current"
+                    ip_grp.attrs["units"] = "A"
+
+                if basic.toroidal_field is not None:
+                    bt_grp = basic_grp.create_group("toroidal_field")
+                    bt_grp.create_dataset(
+                        "time",
+                        data=basic.toroidal_field.time,
+                        compression=compression,
+                        compression_opts=compression_opts,
+                    )
+                    bt_grp.create_dataset(
+                        "intensity",
+                        data=basic.toroidal_field.intensity,
+                        compression=compression,
+                        compression_opts=compression_opts,
+                    )
+                    bt_grp.attrs["label"] = "Toroidal Field"
+                    bt_grp.attrs["units"] = "T"
+
+                if basic.chamber_current is not None:
+                    ich_grp = basic_grp.create_group("chamber_current")
+                    ich_grp.create_dataset(
+                        "time",
+                        data=basic.chamber_current.time,
+                        compression=compression,
+                        compression_opts=compression_opts,
+                    )
+                    ich_grp.create_dataset(
+                        "intensity",
+                        data=basic.chamber_current.intensity,
+                        compression=compression,
+                        compression_opts=compression_opts,
+                    )
+                    ich_grp.attrs["label"] = "Chamber Current"
+                    ich_grp.attrs["units"] = "A"
+
+                if basic.loop_voltage is not None:
+                    uloop_grp = basic_grp.create_group("loop_voltage")
+                    uloop_grp.create_dataset(
+                        "time",
+                        data=basic.loop_voltage.time,
+                        compression=compression,
+                        compression_opts=compression_opts,
+                    )
+                    uloop_grp.create_dataset(
+                        "intensity",
+                        data=basic.loop_voltage.intensity,
+                        compression=compression,
+                        compression_opts=compression_opts,
+                    )
+                    uloop_grp.attrs["label"] = "Loop Voltage"
+                    uloop_grp.attrs["units"] = "V"
+
+            # Fast spectrometry
+            if "spectrometry" in all_data:
+                spec = all_data["spectrometry"]
+                spec_grp = f.create_group("spectrometry")
+
+                for line_name, line_data in spec.items():
+                    line_grp = spec_grp.create_group(line_name.replace(" ", "_"))
+                    line_grp.create_dataset(
+                        "time",
+                        data=line_data.time,
+                        compression=compression,
+                        compression_opts=compression_opts,
+                    )
+                    line_grp.create_dataset(
+                        "intensity",
+                        data=line_data.intensity,
+                        compression=compression,
+                        compression_opts=compression_opts,
+                    )
+                    line_grp.attrs["label"] = line_name
+                    line_grp.attrs["units"] = "a.u."
+
+            # MHD Ring
+            if "mhd_ring" in all_data:
+                mhd = all_data["mhd_ring"]
+                mhd_grp = f.create_group("mhd_ring")
+
+                for ring_num, ring_data in mhd.rings.items():
+                    ring_grp = mhd_grp.create_group(f"ring_{ring_num}")
+                    ring_grp.create_dataset(
+                        "time",
+                        data=ring_data.time,
+                        compression=compression,
+                        compression_opts=compression_opts,
+                    )
+                    ring_grp.create_dataset(
+                        "intensity",
+                        data=ring_data.intensity,
+                        compression=compression,
+                        compression_opts=compression_opts,
+                    )
+                    ring_grp.attrs["label"] = f"MHD Ring {ring_num}"
+                    ring_grp.attrs["units"] = "V"
+
+            # Mirnov Coils
+            if "mirnov" in all_data:
+                mirnov = all_data["mirnov"]
+                mirnov_grp = f.create_group("mirnov_coils")
+
+                for coil_num, coil_data in mirnov.coils.items():
+                    coil_grp = mirnov_grp.create_group(f"coil_{coil_num}")
+                    coil_grp.create_dataset(
+                        "time",
+                        data=coil_data.time,
+                        compression=compression,
+                        compression_opts=compression_opts,
+                    )
+                    coil_grp.create_dataset(
+                        "intensity",
+                        data=coil_data.intensity,
+                        compression=compression,
+                        compression_opts=compression_opts,
+                    )
+                    coil_grp.attrs["label"] = f"Mirnov Coil {coil_num}"
+                    coil_grp.attrs["units"] = "V"
+
+            # Plasma Detection
+            if "plasma_detection" in all_data:
+                plasma = all_data["plasma_detection"]
+                plasma_grp = f.create_group("plasma_detection")
+
+                signals = [
+                    ("bt_coil", plasma.bt_coil, "BT Coil"),
+                    ("bt_coil_int", plasma.bt_coil_integrated, "BT Coil Integrated"),
+                    ("rog_coil", plasma.rogowski_coil, "Rogowski Coil"),
+                    (
+                        "rog_coil_int",
+                        plasma.rogowski_coil_integrated,
+                        "Rogowski Coil Integrated",
+                    ),
+                    ("photocell", plasma.leybold_photocell, "Leybold Photocell"),
+                    ("loop_signal", plasma.loop_signal, "Loop Signal"),
+                ]
+
+                for name, signal, label in signals:
+                    if signal is not None:
+                        sig_grp = plasma_grp.create_group(name)
+                        sig_grp.create_dataset(
+                            "time",
+                            data=signal.time,
+                            compression=compression,
+                            compression_opts=compression_opts,
+                        )
+                        sig_grp.create_dataset(
+                            "intensity",
+                            data=signal.intensity,
+                            compression=compression,
+                            compression_opts=compression_opts,
+                        )
+                        sig_grp.attrs["label"] = label
+                        sig_grp.attrs["units"] = "V"
+
+            # Shot info
+            if "info" in all_data:
+                info = all_data["info"]
+                info_grp = f.create_group("shot_info")
+                info_grp.attrs["shot_number"] = info.shot_number
+                if info.logbook_text:
+                    info_grp.attrs["logbook"] = info.logbook_text
+                if info.timestamp:
+                    info_grp.attrs["timestamp"] = info.timestamp
+
+                # Available diagnostics
+                if info.available_diagnostics:
+                    diag_grp = info_grp.create_group("available_diagnostics")
+                    for diag, available in info.available_diagnostics.items():
+                        diag_grp.attrs[diag] = available
+
+        logger.info(f"Successfully exported shot {self.shot_number} to {output_path}")
+        file_size = Path(output_path).stat().st_size / (1024 * 1024)  # MB
+        logger.info(f"File size: {file_size:.2f} MB")
+
     def get_available_diagnostics(self) -> Dict[str, bool]:
         """
         Check which diagnostics are available for this shot.
@@ -446,6 +1120,56 @@ class GolemDataLoader:
             availability["MiniSpectrometer"] = True
         except:
             availability["MiniSpectrometer"] = False
+
+        # Check basic diagnostics
+        basic_files = ["Bt", "Ip", "Ich", "U_loop"]
+        basic_available = False
+        for filename in basic_files:
+            url = f"{self.base_url}BasicDiagnostics/Results/{filename}.csv"
+            try:
+                urllib.request.urlopen(url, timeout=5)
+                basic_available = True
+                break
+            except:
+                pass
+        availability["BasicDiagnostics"] = basic_available
+
+        # Check Mirnov coils
+        mirnov_available = False
+        for coil_num in [1, 5, 9, 13]:
+            url = f"{self.base_url}LimiterMirnovCoils/U_mc{coil_num}.csv"
+            try:
+                urllib.request.urlopen(url, timeout=5)
+                mirnov_available = True
+                break
+            except:
+                pass
+        availability["MirnovCoils"] = mirnov_available
+
+        # Check MHD ring
+        mhd_available = False
+        for ring_num in range(1, 6):
+            url = f"{self.base_url}MHDring-TM/ring_{ring_num}.csv"
+            try:
+                urllib.request.urlopen(url, timeout=5)
+                mhd_available = True
+                break
+            except:
+                pass
+        availability["MHDRing"] = mhd_available
+
+        # Check plasma detection
+        plasma_files = ["U_BtCoil", "U_RogCoil", "U_Loop"]
+        plasma_available = False
+        for filename in plasma_files:
+            url = f"{self.base_url}PlasmaDetection/{filename}.csv"
+            try:
+                urllib.request.urlopen(url, timeout=5)
+                plasma_available = True
+                break
+            except:
+                pass
+        availability["PlasmaDetection"] = plasma_available
 
         return availability
 

@@ -1,0 +1,17 @@
+#!/Users/samuelstanek/GitHub/PRPL2025_ZS/.venv/bin/python
+"""
+Wrapper script for GOLEM CLI - runs the CLI from the package.
+Uses the virtual environment Python with pandas installed.
+"""
+
+import sys
+from pathlib import Path
+
+# Add package to path
+package_dir = Path(__file__).parent / "golem_data_loader"
+sys.path.insert(0, str(package_dir.parent))
+
+from golem_data_loader.cli import main
+
+if __name__ == "__main__":
+    sys.exit(main())

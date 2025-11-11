@@ -1,16 +1,26 @@
 # GOLEM Data Loader Module
 
-A robust, type-safe Python module for loading diagnostic data from the GOLEM tokamak web server.
+A robust, type-safe Python package for loading diagnostic data from the GOLEM tokamak web server.
+
+## 🆕 Version 1.1.0 - New Features
+
+- ✅ **Extended Diagnostics**: Load BasicDiagnostics, Mirnov Coils, MHD Ring, and Plasma Detection
+- ✅ **Shot Information**: Access shot logbooks and metadata
+- ✅ **Command-Line Interface**: New `golem-cli` tool for quick data inspection
+- ✅ **Load All Data**: Single function to load all available diagnostics
+- ✅ **Export Capability**: Export data to CSV files via CLI
 
 ## Features
 
+- ✅ **Comprehensive Data Loading**: Support for 7+ diagnostic types
 - ✅ **Type-safe**: Full type annotations for excellent IDE support and type checking
 - ✅ **Robust error handling**: Automatic retries with configurable delays
-- ✅ **Flexible API**: Load all or specific spectroscopy lines
+- ✅ **Flexible API**: Load all or specific diagnostics
 - ✅ **Data validation**: Built-in validation of loaded data
 - ✅ **Structured data**: Returns well-structured dataclasses instead of raw dictionaries
 - ✅ **Comprehensive logging**: Detailed logging for debugging and monitoring
 - ✅ **Clean resource management**: Automatic cleanup of temporary files
+- ✅ **CLI Tool**: Command-line interface for quick data access
 - ✅ **Backward compatible**: Easy integration with existing code
 
 ## Installation
@@ -75,6 +85,59 @@ if spectrometry:
 if minispec:
     print(f"Loaded spectra with shape {minispec.spectra.shape}")
 ```
+
+### 🆕 Loading Other Diagnostics
+
+```python
+loader = GolemDataLoader(50377)
+
+# Basic diagnostics (Bt, Ip, Ich, U_loop)
+basic = loader.load_basic_diagnostics()
+if basic.plasma_current:
+    print(f"Plasma current: {len(basic.plasma_current.time)} points")
+
+# Mirnov coils
+mirnov = loader.load_mirnov_coils()
+for coil_num, signal in mirnov.coils.items():
+    print(f"Coil {coil_num}: {len(signal.time)} points")
+
+# MHD ring
+mhd = loader.load_mhd_ring()
+print(f"Loaded {len(mhd.rings)} rings")
+
+# Plasma detection
+plasma = loader.load_plasma_detection()
+if plasma.rog_coil:
+    print(f"Rogowski coil: {len(plasma.rog_coil.time)} points")
+
+# Shot information and logbook
+info = loader.load_shot_info()
+print(f"Shot #{info.shot_number}")
+print(f"Logbook: {len(info.logbook)} characters")
+
+# Load everything at once
+all_data = loader.load_all_diagnostics()
+print(f"Loaded {len(all_data)} diagnostic categories")
+```
+
+### 🆕 Using the CLI
+
+```bash
+# Show shot information
+./golem-cli info 50377
+
+# List available diagnostics
+./golem-cli list 50377
+
+# Load specific diagnostic
+./golem-cli load 50377 basic
+./golem-cli load 50377 spectrometry
+
+# Export all data
+./golem-cli export 50377 ./data/shot_50377
+```
+
+See `CLI_GUIDE.md` for complete CLI documentation.
 
 ### Checking Data Availability
 
