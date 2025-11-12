@@ -60,9 +60,9 @@ class DataValidationError(DataLoadError):
 class SpectroscopyLine(Enum):
     """Enumeration of available fast spectrometry signals."""
 
-    H_ALPHA = ("Hα", "U_Halpha.csv")
-    H_BETA = ("Hβ", "U_Hbeta.csv")
-    HE_I = ("He I", "U_HeI.csv")
+    H_ALPHA = ("Hα", "U_656.csv")
+    H_BETA = ("C III + O II", "U_467.csv")
+    HE_I = ("He I", "U_589.csv")
     WHOLE = ("Whole", "U_whole.csv")
 
     def __init__(self, display_name: str, filename: str):
