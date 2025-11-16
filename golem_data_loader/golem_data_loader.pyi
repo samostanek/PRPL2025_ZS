@@ -43,6 +43,13 @@ class MiniSpectrometerData:
     def cleanup(self) -> None: ...
 
 @dataclass
+class FastCameraData:
+    camera_type: str
+    frames: np.ndarray
+    frame_rate: float = 80000.0
+    time: Optional[np.ndarray] = None
+
+@dataclass
 class LoaderConfig:
     base_url_template: str = ...
     max_retries: int = 3
@@ -66,13 +73,19 @@ class GolemDataLoader:
     def load_minispectrometer_h5(
         self, h5_filename: str = "IRVISUV_0.h5", keep_temp_file: bool = False
     ) -> MiniSpectrometerData: ...
+    def load_fast_cameras(
+        self, cameras: Optional[List[str]] = None, max_frames: Optional[int] = None
+    ) -> Dict[str, FastCameraData]: ...
     def get_available_diagnostics(self) -> Dict[str, bool]: ...
 
 def load_shot_data(
     shot_number: int,
     include_spectrometry: bool = True,
     include_minispectrometer: bool = True,
+    include_fast_cameras: bool = False,
     **kwargs: Any,
 ) -> Tuple[
-    Optional[Dict[str, FastSpectrometryData]], Optional[MiniSpectrometerData]
+    Optional[Dict[str, FastSpectrometryData]],
+    Optional[MiniSpectrometerData],
+    Optional[Dict[str, FastCameraData]],
 ]: ...

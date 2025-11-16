@@ -11,6 +11,7 @@ from .golem_data_loader import (
     # Data structures
     FastSpectrometryData,
     MiniSpectrometerData,
+    FastCameraData,
     LoaderConfig,
     # Enums
     SpectroscopyLine,
@@ -29,6 +30,7 @@ __all__ = [
     "GolemDataLoader",
     "FastSpectrometryData",
     "MiniSpectrometerData",
+    "FastCameraData",
     "LoaderConfig",
     "SpectroscopyLine",
     "DataLoadError",

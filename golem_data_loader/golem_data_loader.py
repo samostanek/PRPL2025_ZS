@@ -5,11 +5,17 @@ This module provides a robust interface for loading diagnostic data from the
 GOLEM tokamak web server. It includes retry logic, error handling, and type-safe
 data structures.
 
+Supported diagnostics:
+- Fast Spectrometry (CSV data)
+- Mini-Spectrometer (HDF5 data)
+- Fast Cameras (Radial and Vertical, 80000 fps)
+
 Example:
     >>> from golem_data_loader import GolemDataLoader
     >>> loader = GolemDataLoader(shot_number=50377)
     >>> spectrometry_data = loader.load_fast_spectrometry()
     >>> h5_data = loader.load_minispectrometer_h5()
+    >>> cameras = loader.load_fast_cameras()
 """
 
 from __future__ import annotations
@@ -117,6 +123,32 @@ class MiniSpectrometerData:
                 logger.info(f"Cleaned up temporary file: {self.temp_file_path}")
             except Exception as e:
                 logger.warning(f"Failed to cleanup temp file: {e}")
+
+
+@dataclass
+class FastCameraData:
+    """Container for fast camera data.
+
+    Each frame is stored as a PNG file and captured at 80000 fps.
+    Frames are 1 pixel tall (height dimension squeezed out).
+
+    Attributes:
+        camera_type: Type of camera ('radial' or 'vertical')
+        frames: Array of frame data with shape [num_frames, width, channels] for RGB images
+        frame_rate: Frame rate in fps (default: 80000)
+        time: Time array in seconds for each frame
+    """
+
+    camera_type: str
+    frames: np.ndarray
+    frame_rate: float = 80000.0
+    time: Optional[np.ndarray] = None
+
+    def __post_init__(self):
+        """Calculate time array if not provided."""
+        if self.time is None:
+            num_frames = self.frames.shape[0]
+            self.time = np.arange(num_frames) / self.frame_rate
 
 
 @dataclass
@@ -415,6 +447,161 @@ class GolemDataLoader:
                 raise
             raise DataLoadError(f"Failed to load mini-spectrometer H5 data: {e}") from e
 
+    def load_fast_cameras(
+        self, cameras: Optional[List[str]] = None, max_frames: Optional[int] = None
+    ) -> Dict[str, FastCameraData]:
+        """
+        Load fast camera frame data.
+
+        Each camera captures one-pixel-wide frames at 80000 fps.
+        Frames are stored as individual PNG files (1.png, 2.png, etc.).
+
+        Args:
+            cameras: List of camera types to load ('radial', 'vertical').
+                    If None, loads both cameras.
+            max_frames: Maximum number of frames to load. If None, loads until
+                       a frame is not found (assumes sequential numbering).
+
+        Returns:
+            Dictionary mapping camera type to FastCameraData objects
+
+        Raises:
+            DataLoadError: If data cannot be loaded
+            DataValidationError: If loaded data fails validation
+
+        Example:
+            >>> loader = GolemDataLoader(50377)
+            >>> cameras = loader.load_fast_cameras()
+            >>> radial_data = cameras['radial']
+            >>> print(radial_data.frames.shape)
+        """
+        if cameras is None:
+            cameras = ["radial", "vertical"]
+
+        results: Dict[str, FastCameraData] = {}
+        failed_loads: List[tuple[str, Exception]] = []
+
+        for camera_type in cameras:
+            try:
+                # Construct base URL based on camera type
+                if camera_type.lower() == "radial":
+                    base_url = f"http://golem.fjfi.cvut.cz/shots/{self.shot_number}/Diagnostics/FastCameras/Camera_Radial/Frames/"
+                    description = "Fast Camera (Radial)"
+                elif camera_type.lower() == "vertical":
+                    base_url = f"http://golem.fjfi.cvut.cz/shots/{self.shot_number}/Diagnostics/FastCameras/Camera_Vertical/"
+                    description = "Fast Camera (Vertical)"
+                else:
+                    raise ValueError(
+                        f"Unknown camera type: {camera_type}. Must be 'radial' or 'vertical'"
+                    )
+
+                # Load PNG frames sequentially
+                from io import BytesIO
+
+                try:
+                    from PIL import Image
+                except ImportError:
+                    raise DataLoadError(
+                        "PIL/Pillow is required to load PNG frames. "
+                        "Install with: pip install Pillow"
+                    )
+
+                frames_list = []
+                frame_num = 1
+                consecutive_failures = 0
+                max_consecutive_failures = 5  # Stop after 5 consecutive missing frames
+
+                logger.info(f"Loading {description} frames...")
+
+                while True:
+                    # Check if we've reached max_frames
+                    if max_frames is not None and frame_num > max_frames:
+                        break
+
+                    # Check if we've had too many consecutive failures
+                    if consecutive_failures >= max_consecutive_failures:
+                        logger.info(
+                            f"Stopped after {max_consecutive_failures} consecutive missing frames"
+                        )
+                        break
+
+                    frame_url = f"{base_url}{frame_num}.png"
+
+                    try:
+                        # Try to fetch the frame
+                        frame_bytes = self._fetch_url_with_retry(
+                            frame_url, f"{description} frame {frame_num}"
+                        )
+
+                        # Load PNG image
+                        img = Image.open(BytesIO(frame_bytes))
+                        # Convert to numpy array, keeping all RGB channels
+                        frame_array = np.array(img)
+
+                        frames_list.append(frame_array)
+                        consecutive_failures = 0  # Reset counter on success
+                        frame_num += 1
+
+                        # Log progress every 100 frames
+                        if frame_num % 100 == 0:
+                            logger.info(f"Loaded {frame_num} frames...")
+
+                    except FileNotFoundError:
+                        # Frame not found, increment failure counter
+                        consecutive_failures += 1
+                        frame_num += 1
+                        continue
+
+                    except Exception as e:
+                        logger.warning(f"Error loading frame {frame_num}: {e}")
+                        consecutive_failures += 1
+                        frame_num += 1
+                        continue
+
+                if not frames_list:
+                    raise DataLoadError(f"No frames found for {camera_type} camera")
+
+                # Stack all frames into a single array
+                # frames shape before squeeze: [num_frames, height, width, channels]
+                # Since height is always 1, squeeze it out: [num_frames, width, channels]
+                frames = np.array(frames_list)
+
+                # Remove the height dimension (axis=1) since it's always 1
+                if frames.ndim == 4 and frames.shape[1] == 1:
+                    frames = frames.squeeze(axis=1)
+
+                # Create structured data object
+                camera_data = FastCameraData(
+                    camera_type=camera_type.lower(), frames=frames, frame_rate=80000.0
+                )
+
+                results[camera_type.lower()] = camera_data
+                logger.info(
+                    f"{description}: loaded {frames.shape[0]} frames, "
+                    f"frame size = {frames.shape[1:]} pixels"
+                )
+
+            except FileNotFoundError as e:
+                logger.warning(f"File not found for {camera_type} camera: {e}")
+                failed_loads.append((camera_type, e))
+
+            except Exception as e:
+                logger.error(f"Failed to load {camera_type} camera: {e}")
+                failed_loads.append((camera_type, e))
+
+        if not results and failed_loads:
+            # All loads failed
+            raise DataLoadError(
+                f"Failed to load any camera data. Errors: {failed_loads}"
+            )
+
+        if failed_loads:
+            logger.warning(
+                f"Partially loaded data. Failed: {[name for name, _ in failed_loads]}"
+            )
+
+        return results
+
     def get_available_diagnostics(self) -> Dict[str, bool]:
         """
         Check which diagnostics are available for this shot.
@@ -447,6 +634,18 @@ class GolemDataLoader:
         except:
             availability["MiniSpectrometer"] = False
 
+        # Check fast cameras
+        camera_urls = {
+            "FastCamera_Radial": f"http://golem.fjfi.cvut.cz/shots/{self.shot_number}/Diagnostics/FastCameras/Camera_Radial/Frames/",
+            "FastCamera_Vertical": f"http://golem.fjfi.cvut.cz/shots/{self.shot_number}/Diagnostics/FastCameras/Camera_Vertical/",
+        }
+        for camera_name, url in camera_urls.items():
+            try:
+                urllib.request.urlopen(url, timeout=5)
+                availability[camera_name] = True
+            except:
+                availability[camera_name] = False
+
         return availability
 
 
@@ -455,8 +654,13 @@ def load_shot_data(
     shot_number: int,
     include_spectrometry: bool = True,
     include_minispectrometer: bool = True,
+    include_fast_cameras: bool = False,
     **kwargs,
-) -> tuple[Optional[Dict[str, FastSpectrometryData]], Optional[MiniSpectrometerData]]:
+) -> tuple[
+    Optional[Dict[str, FastSpectrometryData]],
+    Optional[MiniSpectrometerData],
+    Optional[Dict[str, FastCameraData]],
+]:
     """
     Convenience function to load all available data for a shot.
 
@@ -464,21 +668,25 @@ def load_shot_data(
         shot_number: GOLEM shot number
         include_spectrometry: Whether to load fast spectrometry data
         include_minispectrometer: Whether to load mini-spectrometer data
+        include_fast_cameras: Whether to load fast camera data
         **kwargs: Additional arguments passed to GolemDataLoader
 
     Returns:
-        Tuple of (spectrometry_data, minispectrometer_data)
-        Either can be None if not requested or if loading fails
+        Tuple of (spectrometry_data, minispectrometer_data, fast_camera_data)
+        Any can be None if not requested or if loading fails
 
     Example:
-        >>> spectrometry, minispec = load_shot_data(50377)
+        >>> spectrometry, minispec, cameras = load_shot_data(50377, include_fast_cameras=True)
         >>> if spectrometry:
         ...     print(f"Loaded {len(spectrometry)} spectrometry signals")
+        >>> if cameras:
+        ...     print(f"Loaded {len(cameras)} cameras")
     """
     loader = GolemDataLoader(shot_number, **kwargs)
 
     spectrometry_data = None
     minispectrometer_data = None
+    fast_camera_data = None
 
     if include_spectrometry:
         try:
@@ -492,4 +700,10 @@ def load_shot_data(
         except DataLoadError as e:
             logger.error(f"Failed to load mini-spectrometer data: {e}")
 
-    return spectrometry_data, minispectrometer_data
+    if include_fast_cameras:
+        try:
+            fast_camera_data = loader.load_fast_cameras()
+        except DataLoadError as e:
+            logger.error(f"Failed to load fast camera data: {e}")
+
+    return spectrometry_data, minispectrometer_data, fast_camera_data
