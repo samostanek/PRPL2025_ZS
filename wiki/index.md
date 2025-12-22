@@ -26,6 +26,8 @@ Dichroic mirror is an optical element that reflects light with wavelength smalle
 
 ### Proposed fast spectrometer configuration
 
+TODO
+
 ### Plan
 
 In this work, the following tasks are planned:
@@ -42,7 +44,23 @@ In this work, the following tasks are planned:
 
 (záznamy o uskutečněných měřeních. Datum, čísla výbojů, záměry, "minutes of the experiment" )
 
-## Report v poločase
+TODO
+
+### Spectral line choice (19.10.2025)
+
+TODO: specific choice
+
+### Assembled first version with dichroic mirrors (29.10.2025)
+
+### Parts selected for purchase ()
+
+<!-- TODO: dont forget about resistor choice -->
+
+### Assembly of full spectroscope
+
+### Scan of multiple resistor values (3.12.2025)
+
+### Reconfigure for H discharges ()
 
 ## Závěrečný report (třeba dle [IMRAD stylu](https://en.wikipedia.org/wiki/IMRAD) )
 
@@ -56,6 +74,7 @@ In this work, the following tasks are planned:
 4. We could just get rid of the splitters, doubling the sensitivity
 5. Compare measurements from fast cameras, slow spectrometers and fast spectrometer
 6. Assemble fast spectrometer fo He plasmas
+7. Explore why Whole and He line doesn't agreee slow spectrometer
 
 ## Bibliography
 
