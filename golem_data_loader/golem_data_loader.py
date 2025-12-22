@@ -67,7 +67,7 @@ class SpectroscopyLine(Enum):
     """Enumeration of available fast spectrometry signals."""
 
     H_ALPHA = ("Hα", "DAS_raw_data_dir/ch8.csv")
-    Cl_II = ("Cl II 479.5nm", "DAS_raw_data_dir/ch5.csv")
+    Cl_II = ("Hb 486nm", "DAS_raw_data_dir/ch5.csv")
     HE_I = ("He I 588nm", "DAS_raw_data_dir/ch7.csv")
     WHOLE = ("Whole", "DAS_raw_data_dir/ch6.csv")
     C_II = ("C II 514.5nm", "DAS_raw_data_dir/ch4.csv")
@@ -156,6 +156,28 @@ class FastCameraData:
 
 
 @dataclass
+class PlasmaTiming:
+    """Container for plasma detection timing data.
+
+    Attributes:
+        t_plasma_start_ms: Plasma start time in milliseconds
+        t_plasma_end_ms: Plasma end time in milliseconds
+        t_plasma_start: Plasma start time in seconds
+        t_plasma_end: Plasma end time in seconds
+    """
+
+    t_plasma_start_ms: float
+    t_plasma_end_ms: float
+    t_plasma_start: float = field(init=False)
+    t_plasma_end: float = field(init=False)
+
+    def __post_init__(self):
+        """Calculate second values."""
+        self.t_plasma_start = self.t_plasma_start_ms * 1e-3
+        self.t_plasma_end = self.t_plasma_end_ms * 1e-3
+
+
+@dataclass
 class LoaderConfig:
     """Configuration for the GOLEM data loader.
 
@@ -207,6 +229,7 @@ class GolemDataLoader:
         self.shot_number = shot_number
         self.config = config or LoaderConfig()
         self.base_url = self.config.base_url_template.format(shot=shot_number)
+        self.plasma_timing: Optional[PlasmaTiming] = None
 
         # Configure logging
         if not logger.handlers:
@@ -217,6 +240,12 @@ class GolemDataLoader:
             handler.setFormatter(formatter)
             logger.addHandler(handler)
         logger.setLevel(log_level)
+
+        # Automatically load plasma timing
+        try:
+            self.plasma_timing = self.load_plasma_timing()
+        except Exception as e:
+            logger.warning(f"Could not load plasma timing: {e}")
 
     def _fetch_url_with_retry(self, url: str, description: str = "data") -> bytes:
         """
@@ -605,6 +634,46 @@ class GolemDataLoader:
             )
 
         return results
+
+    def load_plasma_timing(self) -> PlasmaTiming:
+        """
+        Load plasma detection timing data.
+
+        Returns:
+            PlasmaTiming object containing plasma start and end times
+
+        Raises:
+            DataLoadError: If timing data cannot be loaded
+
+        Example:
+            >>> loader = GolemDataLoader(50930)
+            >>> timing = loader.load_plasma_timing()
+            >>> print(f"Plasma from {timing.t_plasma_start_ms:.2f} to {timing.t_plasma_end_ms:.2f} ms")
+        """
+        # Fetch plasma start time
+        start_url = f"http://golem.fjfi.cvut.cz/shots/{self.shot_number}/Diagnostics/PlasmaDetection/Results/t_plasma_start"
+        end_url = f"http://golem.fjfi.cvut.cz/shots/{self.shot_number}/Diagnostics/PlasmaDetection/Results/t_plasma_end"
+
+        try:
+            start_data = self._fetch_url_with_retry(start_url, "plasma start time")
+            end_data = self._fetch_url_with_retry(end_url, "plasma end time")
+
+            # Parse the values (they are already in milliseconds)
+            t_plasma_start_ms = float(start_data.decode("utf-8").strip())
+            t_plasma_end_ms = float(end_data.decode("utf-8").strip())
+
+            timing = PlasmaTiming(
+                t_plasma_start_ms=t_plasma_start_ms, t_plasma_end_ms=t_plasma_end_ms
+            )
+
+            logger.info(
+                f"Loaded plasma timing: {timing.t_plasma_start_ms:.2f} - {timing.t_plasma_end_ms:.2f} ms"
+            )
+
+            return timing
+
+        except Exception as e:
+            raise DataLoadError(f"Failed to load plasma timing: {e}") from e
 
     def get_available_diagnostics(self) -> Dict[str, bool]:
         """

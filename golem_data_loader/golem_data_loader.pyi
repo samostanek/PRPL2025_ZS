@@ -50,6 +50,13 @@ class FastCameraData:
     time: Optional[np.ndarray] = None
 
 @dataclass
+class PlasmaTiming:
+    t_plasma_start: float
+    t_plasma_end: float
+    t_plasma_start_ms: float
+    t_plasma_end_ms: float
+
+@dataclass
 class LoaderConfig:
     base_url_template: str = ...
     max_retries: int = 3
@@ -60,6 +67,7 @@ class GolemDataLoader:
     shot_number: int
     config: LoaderConfig
     base_url: str
+    plasma_timing: Optional[PlasmaTiming]
 
     def __init__(
         self,
@@ -76,6 +84,7 @@ class GolemDataLoader:
     def load_fast_cameras(
         self, cameras: Optional[List[str]] = None, max_frames: Optional[int] = None
     ) -> Dict[str, FastCameraData]: ...
+    def load_plasma_timing(self) -> PlasmaTiming: ...
     def get_available_diagnostics(self) -> Dict[str, bool]: ...
 
 def load_shot_data(
