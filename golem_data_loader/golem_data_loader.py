@@ -66,8 +66,8 @@ class DataValidationError(DataLoadError):
 class SpectroscopyLine(Enum):
     """Enumeration of available fast spectrometry signals."""
 
-    H_ALPHA = ("Hα", "DAS_raw_data_dir/ch8.csv")
-    Cl_II = ("Hb 486nm", "DAS_raw_data_dir/ch5.csv")
+    H_ALPHA = ("Hα 656.5nm", "DAS_raw_data_dir/ch8.csv")
+    Cl_II = ("Cl II 479.5nm", "DAS_raw_data_dir/ch5.csv")
     HE_I = ("He I 588nm", "DAS_raw_data_dir/ch7.csv")
     WHOLE = ("Whole", "DAS_raw_data_dir/ch6.csv")
     C_II = ("C II 514.5nm", "DAS_raw_data_dir/ch4.csv")
@@ -521,7 +521,7 @@ class GolemDataLoader:
                     base_url = f"http://golem.fjfi.cvut.cz/shots/{self.shot_number}/Diagnostics/FastCameras/Camera_Radial/Frames/"
                     description = "Fast Camera (Radial)"
                 elif camera_type.lower() == "vertical":
-                    base_url = f"http://golem.fjfi.cvut.cz/shots/{self.shot_number}/Diagnostics/FastCameras/Camera_Vertical/"
+                    base_url = f"http://golem.fjfi.cvut.cz/shots/{self.shot_number}/Diagnostics/FastCameras/Camera_Vertical/Frames/"
                     description = "Fast Camera (Vertical)"
                 else:
                     raise ValueError(
