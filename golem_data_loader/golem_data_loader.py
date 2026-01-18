@@ -133,19 +133,19 @@ class MiniSpectrometerData:
 class FastCameraData:
     """Container for fast camera data.
 
-    Each frame is stored as a PNG file and captured at 80000 fps.
+    Each frame is stored as a PNG file.
     Frames are 1 pixel tall (height dimension squeezed out).
 
     Attributes:
         camera_type: Type of camera ('radial' or 'vertical')
         frames: Array of frame data with shape [num_frames, width, channels] for RGB images
-        frame_rate: Frame rate in fps (default: 80000)
+        frame_rate: Frame rate in fps (loaded from server, typically 40000-80000 fps)
         time: Time array in seconds for each frame
     """
 
     camera_type: str
     frames: np.ndarray
-    frame_rate: float = 80000.0
+    frame_rate: float
     time: Optional[np.ndarray] = None
 
     def __post_init__(self):
@@ -486,8 +486,9 @@ class GolemDataLoader:
         """
         Load fast camera frame data.
 
-        Each camera captures one-pixel-wide frames at 80000 fps.
+        Each camera captures one-pixel-wide frames at varying frame rates.
         Frames are stored as individual PNG files (1.png, 2.png, etc.).
+        Frame rates are loaded from the server for each camera.
 
         Args:
             cameras: List of camera types to load ('radial', 'vertical').
@@ -519,14 +520,27 @@ class GolemDataLoader:
                 # Construct base URL based on camera type
                 if camera_type.lower() == "radial":
                     base_url = f"http://golem.fjfi.cvut.cz/shots/{self.shot_number}/Diagnostics/FastCameras/Camera_Radial/Frames/"
+                    frame_rate_url = f"http://golem.fjfi.cvut.cz/shots/{self.shot_number}/Diagnostics/FastCameras/Parameters/recrate_ux100a"
                     description = "Fast Camera (Radial)"
                 elif camera_type.lower() == "vertical":
                     base_url = f"http://golem.fjfi.cvut.cz/shots/{self.shot_number}/Diagnostics/FastCameras/Camera_Vertical/Frames/"
+                    frame_rate_url = f"http://golem.fjfi.cvut.cz/shots/{self.shot_number}/Diagnostics/FastCameras/Parameters/recrate_ux100b"
                     description = "Fast Camera (Vertical)"
                 else:
                     raise ValueError(
                         f"Unknown camera type: {camera_type}. Must be 'radial' or 'vertical'"
                     )
+                
+                # Load frame rate from URL
+                try:
+                    frame_rate_data = self._fetch_url_with_retry(
+                        frame_rate_url, f"{description} frame rate"
+                    )
+                    frame_rate = float(frame_rate_data.decode('utf-8').strip())
+                    logger.info(f"{description} frame rate: {frame_rate} fps")
+                except Exception as e:
+                    logger.warning(f"Failed to load frame rate for {camera_type}, using default 80000.0 fps: {e}")
+                    frame_rate = 80000.0
 
                 # Load PNG frames sequentially
                 from io import BytesIO
@@ -605,7 +619,7 @@ class GolemDataLoader:
 
                 # Create structured data object
                 camera_data = FastCameraData(
-                    camera_type=camera_type.lower(), frames=frames, frame_rate=80000.0
+                    camera_type=camera_type.lower(), frames=frames, frame_rate=frame_rate
                 )
 
                 results[camera_type.lower()] = camera_data
