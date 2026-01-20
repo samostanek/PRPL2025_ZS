@@ -20,9 +20,13 @@ class DataValidationError(DataLoadError): ...
 
 class SpectroscopyLine(Enum):
     H_ALPHA: SpectroscopyLine
-    H_BETA: SpectroscopyLine
+    Cl_II: SpectroscopyLine
     HE_I: SpectroscopyLine
     WHOLE: SpectroscopyLine
+    C_II: SpectroscopyLine
+    N_II: SpectroscopyLine
+    O_I: SpectroscopyLine
+    He_I: SpectroscopyLine
 
     display_name: str
     filename: str
@@ -39,6 +43,10 @@ class MiniSpectrometerData:
     spectra: np.ndarray
     wavelengths: np.ndarray
     temp_file_path: Optional[Path] = None
+    raw_spectra: Optional[np.ndarray] = None
+    spectral_sensitivity: Optional[pd.DataFrame] = None
+    sensitivity_source: Optional[str] = None
+    applied_sensitivity_correction: bool = False
 
     def cleanup(self) -> None: ...
 
@@ -51,10 +59,10 @@ class FastCameraData:
 
 @dataclass
 class PlasmaTiming:
-    t_plasma_start: float
-    t_plasma_end: float
     t_plasma_start_ms: float
     t_plasma_end_ms: float
+    t_plasma_start: float
+    t_plasma_end: float
 
 @dataclass
 class LoaderConfig:
@@ -79,7 +87,10 @@ class GolemDataLoader:
         self, lines: Optional[List[SpectroscopyLine]] = None, validate: bool = True
     ) -> Dict[str, FastSpectrometryData]: ...
     def load_minispectrometer_h5(
-        self, h5_filename: str = "IRVISUV_0.h5", keep_temp_file: bool = False
+        self,
+        h5_filename: str = "IRVISUV_0.h5",
+        keep_temp_file: bool = False,
+        apply_sensitivity_correction: bool = True,
     ) -> MiniSpectrometerData: ...
     def load_fast_cameras(
         self, cameras: Optional[List[str]] = None, max_frames: Optional[int] = None

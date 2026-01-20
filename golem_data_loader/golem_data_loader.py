@@ -113,11 +113,19 @@ class MiniSpectrometerData:
         spectra: 2D array of spectral data [time, wavelength]
         wavelengths: 1D array of wavelength values
         temp_file_path: Path to temporary H5 file (for cleanup)
+        raw_spectra: Original spectra prior to any corrections
+        spectral_sensitivity: DataFrame of ILX511B sensitivity curve (if applied)
+        sensitivity_source: Human-readable source of the sensitivity data
+        applied_sensitivity_correction: True if spectra have been sensitivity corrected
     """
 
     spectra: np.ndarray
     wavelengths: np.ndarray
     temp_file_path: Optional[Path] = None
+    raw_spectra: Optional[np.ndarray] = None
+    spectral_sensitivity: Optional[pd.DataFrame] = None
+    sensitivity_source: Optional[str] = None
+    applied_sensitivity_correction: bool = False
 
     def cleanup(self) -> None:
         """Remove temporary H5 file if it exists."""
@@ -394,8 +402,42 @@ class GolemDataLoader:
 
         return results
 
+    def _load_ilx511b_sensitivity(self) -> pd.DataFrame:
+        """Load the ILX511B CCD spectral sensitivity curve from bundled data.
+
+        Returns:
+            DataFrame with columns 'Wavelength (nm)' and 'Relative Sensitivity'
+        """
+
+        data_path = (
+            Path(__file__).resolve().parent
+            / "data"
+            / "ilx511b_spectral_sensitivity.csv"
+        )
+
+        if not data_path.exists():
+            raise DataLoadError(
+                f"ILX511B spectral sensitivity file not found at {data_path}"
+            )
+
+        sensitivity_df = pd.read_csv(data_path)
+        required_cols = {"Wavelength (nm)", "Relative Sensitivity"}
+        if not required_cols.issubset(sensitivity_df.columns):
+            raise DataValidationError(
+                "Sensitivity file must contain 'Wavelength (nm)' and "
+                "'Relative Sensitivity' columns"
+            )
+
+        sensitivity_df = sensitivity_df.sort_values("Wavelength (nm)").reset_index(
+            drop=True
+        )
+        return sensitivity_df
+
     def load_minispectrometer_h5(
-        self, h5_filename: str = "IRVISUV_0.h5", keep_temp_file: bool = False
+        self,
+        h5_filename: str = "IRVISUV_0.h5",
+        keep_temp_file: bool = False,
+        apply_sensitivity_correction: bool = True,
     ) -> MiniSpectrometerData:
         """
         Load mini-spectrometer HDF5 data.
@@ -405,9 +447,14 @@ class GolemDataLoader:
         Args:
             h5_filename: Name of the H5 file to load
             keep_temp_file: If True, don't delete temporary file (useful for debugging)
+            apply_sensitivity_correction: If True, compensate spectra using the
+                ILX511B CCD spectral sensitivity curve bundled with the package
 
         Returns:
-            MiniSpectrometerData object containing spectra and wavelengths
+            MiniSpectrometerData object containing spectra and wavelengths. By
+            default the spectra are compensated for the ILX511B CCD spectral
+            sensitivity; the uncorrected data are preserved in
+            ``raw_spectra``.
 
         Raises:
             DataLoadError: If data cannot be loaded
@@ -445,19 +492,80 @@ class GolemDataLoader:
                     raise DataValidationError("H5 file missing 'Wavelengths' dataset")
 
                 # Load data (convert to numpy arrays to avoid h5py reference issues)
-                spectra = np.array(h5_file["Spectra"])
+                raw_spectra = np.array(h5_file["Spectra"], dtype=float)
                 wavelengths = np.array(h5_file["Wavelengths"][1:])  # Skip first element
 
                 logger.info(
-                    f"Loaded spectra: shape={spectra.shape}, "
+                    f"Loaded spectra: shape={raw_spectra.shape}, "
                     f"wavelengths: shape={wavelengths.shape}"
                 )
+
+            # Ensure spectra and wavelength arrays are aligned
+            min_len = min(raw_spectra.shape[1], wavelengths.shape[0])
+            if raw_spectra.shape[1] != wavelengths.shape[0]:
+                logger.warning(
+                    "Mini-spectrometer data has mismatched lengths: spectra=%s, wavelengths=%s; "
+                    "trimming to %s columns",
+                    raw_spectra.shape[1],
+                    wavelengths.shape[0],
+                    min_len,
+                )
+            raw_spectra = raw_spectra[:, :min_len]
+            wavelengths = wavelengths[:min_len]
+
+            spectra = raw_spectra.copy()
+            sensitivity_df: Optional[pd.DataFrame] = None
+            applied_sensitivity = False
+
+            if apply_sensitivity_correction:
+                try:
+                    sensitivity_df = self._load_ilx511b_sensitivity()
+                    response = np.interp(
+                        wavelengths,
+                        sensitivity_df["Wavelength (nm)"],
+                        sensitivity_df["Relative Sensitivity"],
+                        left=np.nan,
+                        right=np.nan,
+                    )
+
+                    # Align response length to spectra columns defensively
+                    if spectra.shape[1] != response.shape[0]:
+                        align_len = min(spectra.shape[1], response.shape[0])
+                        logger.warning(
+                            "Sensitivity response length (%s) does not match spectra columns (%s); "
+                            "aligning both to %s",
+                            response.shape[0],
+                            spectra.shape[1],
+                            align_len,
+                        )
+                        spectra = spectra[:, :align_len]
+                        wavelengths = wavelengths[:align_len]
+                        response = response[:align_len]
+
+                    correction = np.ones_like(response, dtype=float)
+                    valid_mask = response > 0
+                    correction[valid_mask] = 1.0 / response[valid_mask]
+
+                    spectra = spectra * correction[np.newaxis, :]
+                    applied_sensitivity = True
+                    logger.info(
+                        "Applied ILX511B spectral sensitivity compensation "
+                        "to mini-spectrometer spectra"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Skipping ILX511B spectral sensitivity compensation: %s", e
+                    )
 
             # Create data object
             result = MiniSpectrometerData(
                 spectra=spectra,
                 wavelengths=wavelengths,
                 temp_file_path=temp_path if keep_temp_file else None,
+                raw_spectra=raw_spectra,
+                spectral_sensitivity=sensitivity_df,
+                sensitivity_source="Sony ILX511B CCD datasheet (typical)",
+                applied_sensitivity_correction=applied_sensitivity,
             )
 
             # Clean up temp file unless requested to keep it
@@ -530,16 +638,18 @@ class GolemDataLoader:
                     raise ValueError(
                         f"Unknown camera type: {camera_type}. Must be 'radial' or 'vertical'"
                     )
-                
+
                 # Load frame rate from URL
                 try:
                     frame_rate_data = self._fetch_url_with_retry(
                         frame_rate_url, f"{description} frame rate"
                     )
-                    frame_rate = float(frame_rate_data.decode('utf-8').strip())
+                    frame_rate = float(frame_rate_data.decode("utf-8").strip())
                     logger.info(f"{description} frame rate: {frame_rate} fps")
                 except Exception as e:
-                    logger.warning(f"Failed to load frame rate for {camera_type}, using default 80000.0 fps: {e}")
+                    logger.warning(
+                        f"Failed to load frame rate for {camera_type}, using default 80000.0 fps: {e}"
+                    )
                     frame_rate = 80000.0
 
                 # Load PNG frames sequentially
@@ -619,7 +729,9 @@ class GolemDataLoader:
 
                 # Create structured data object
                 camera_data = FastCameraData(
-                    camera_type=camera_type.lower(), frames=frames, frame_rate=frame_rate
+                    camera_type=camera_type.lower(),
+                    frames=frames,
+                    frame_rate=frame_rate,
                 )
 
                 results[camera_type.lower()] = camera_data

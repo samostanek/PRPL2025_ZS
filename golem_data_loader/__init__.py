@@ -24,7 +24,7 @@ from .golem_data_loader import (
     load_shot_data,
 )
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 __all__ = [
     "GolemDataLoader",
