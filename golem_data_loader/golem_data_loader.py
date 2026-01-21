@@ -68,12 +68,12 @@ class SpectroscopyLine(Enum):
 
     H_ALPHA = ("Hα 656.5nm", "DAS_raw_data_dir/ch8.csv")
     Cl_II = ("Cl II 479.5nm", "DAS_raw_data_dir/ch5.csv")
-    HE_I = ("He I 588nm", "DAS_raw_data_dir/ch7.csv")
+    HE_I = ("He I 588nm", "DAS_raw_data_dir/ch1.csv")
     WHOLE = ("Whole", "DAS_raw_data_dir/ch6.csv")
     C_II = ("C II 514.5nm", "DAS_raw_data_dir/ch4.csv")
     N_II = ("N II 568.6nm", "DAS_raw_data_dir/ch3.csv")
     O_I = ("O I 777nm", "DAS_raw_data_dir/ch2.csv")
-    He_I = ("He I 447.1nm", "DAS_raw_data_dir/ch1.csv")
+    He_I = ("He I 447.1nm", "DAS_raw_data_dir/ch7.csv")
 
     def __init__(self, display_name: str, filename: str):
         self.display_name = display_name
