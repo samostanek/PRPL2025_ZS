@@ -4,9 +4,9 @@ format:markdown
 
 # Josef Tuček, Samuel Stanek - Spectroscopic analysis of spontaneous transport barriers with high time resolution
 
-## Goals
+The introductory presentation can be found [here](<Spectroscopic analysis of spontaneous transport barriers with high time resolution at GOLEM.pdf>).
 
-(motivace, rešerše, teorie, experimentální uspořádání, záměr, a časový plán)
+## Goals
 
 ### Motivation
 
@@ -129,7 +129,7 @@ Additionally, the resistors for the "whole" and Hα detectors have been changed 
 
 ## Concluding report
 
-The final presentation and report will be added later.
+The final presentation is available [here](<New fast spectroscopy diagnostic at GOLEM - results.pdf>).
 
 ## What to do in the future? (for future students)
 
@@ -140,10 +140,10 @@ The final presentation and report will be added later.
 5. Compare measurements from fast cameras, slow spectrometers and fast spectrometer
 6. Assemble fast spectrometer fo He plasmas
 7. Explore why Whole and He line doesn't agreee slow spectrometer
+8. Get the response of the fast spectrometer as a Green function
+9. Use optics for digitized data transfer
 
 ## Bibliography
-
-<!-- Pozn: na Golem wiki musí být k dispozici všechny použité materiály pro tvorbu reportu tak, aby vaši následovníci mohli jednoduše zreprodukovat všechny vaše analýzy. Skripty, tabulky v Excelu atp. -->
 
 [1] P. Macha et al., “Spontaneous formation of a transport barrier in helium plasma in a tokamak with circular configuration,” Nucl. Fusion, vol. 63, no. 10, p. 104003, Oct. 2023, doi: 10.1088/1741-4326/acf1af.
 
