@@ -134,14 +134,14 @@ The final presentation is available [here](<New fast spectroscopy diagnostic at 
 ## What to do in the future? (for future students)
 
 1. Increase signal intensity / decrease interference
-2. Increase the detection sensitivity
-3. Restrict the field of view
+2. Increase the detection sensitivity (e.g. using Photomultiplier tubes)
+3. ~Restrict the field of view~ - this has been shown to decrease intensity too much
 4. We could just get rid of the splitters, doubling the sensitivity
 5. Compare measurements from fast cameras, slow spectrometers and fast spectrometer
 6. Assemble fast spectrometer fo He plasmas
-7. Explore why Whole and He line doesn't agreee slow spectrometer
+7. Explore why Whole and He line doesn't agreee with slow spectrometer
 8. Get the response of the fast spectrometer as a Green function
-9. Use optics for digitized data transfer
+9. Use optic cables for transfer of digitized data
 
 ## Bibliography
 
