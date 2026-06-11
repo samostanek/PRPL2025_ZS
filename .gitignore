@@ -1,2 +1,10 @@
+.DS_Store
+
 .venv
 .idea
+
+# KiCad temporary files
+*.lck
+*.kicad_prl
+*-backups/
+*.baks
