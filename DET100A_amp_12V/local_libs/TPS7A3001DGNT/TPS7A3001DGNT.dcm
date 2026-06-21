@@ -1,0 +1,9 @@
+EESchema-DOCLIB  Version 2.0
+#
+$CMP TPS7A3001DGNT
+D Texas Instruments TPS7A3001DGNT, Single Negative Voltage Regulator 200mA Adjustable -33 V, 2.5%, 8-Pin MSOP
+K
+F http://www.ti.com/lit/gpn/tps7a30
+$ENDCMP
+#
+#End Doc Library

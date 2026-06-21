@@ -1,0 +1,7 @@
+(sym_lib_table
+	(version 7)
+	(lib (name "OPA656") (type "KiCad") (uri "${KIPRJMOD}/local_libs/OPA656.kicad_sym") (options "") (descr ""))
+	(lib (name "5227677-1") (type "KiCad") (uri "${KIPRJMOD}/local_libs/5227677-1.kicad_sym") (options "") (descr ""))
+	(lib (name "TPS7A4901DGNR") (type "KiCad") (uri "${KIPRJMOD}/local_libs/TPS7A4901DGNR/TPS7A4901DGNR.kicad_sym") (options "") (descr ""))
+	(lib (name "TPS7A3001DGNT") (type "KiCad") (uri "${KIPRJMOD}/local_libs/TPS7A3001DGNT/TPS7A3001DGNT.kicad_sym") (options "") (descr ""))
+)

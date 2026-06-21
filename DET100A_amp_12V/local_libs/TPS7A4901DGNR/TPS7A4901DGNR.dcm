@@ -1,0 +1,9 @@
+EESchema-DOCLIB  Version 2.0
+#
+$CMP TPS7A4901DGNR
+D Vin 3V to 36V, 150mA, Ultra-Low-Noise, High-PSRR Low-Dropout (LDO) Linear Regulator
+K
+F http://www.ti.com/lit/ds/sbvs121b/sbvs121b.pdf
+$ENDCMP
+#
+#End Doc Library
