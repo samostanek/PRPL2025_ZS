@@ -8,3 +8,10 @@
 *.kicad_prl
 *-backups/
 *.baks
+# analysis outputs
+golem_cache/
+out/
+
+# python bytecode
+__pycache__/
+*.py[cod]
