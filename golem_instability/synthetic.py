@@ -220,9 +220,13 @@ def generate(cfg: Optional[SyntheticConfig] = None) -> Dict[str, np.ndarray]:
     return data
 
 
-def _write_csv(path: Path, t: np.ndarray, y: np.ndarray, decimate: int = 1) -> None:
+def _write_csv(path: Path, t: np.ndarray, y: np.ndarray, decimate: int = 1,
+               time_scale: float = 1.0) -> None:
+    """Write the two-column convention; ``time_scale`` != 1 emulates a
+    diagnostic that writes seconds instead of milliseconds, as MHDring-TM
+    really does."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    stack = np.column_stack([t[::decimate], y[::decimate]])
+    stack = np.column_stack([t[::decimate] * time_scale, y[::decimate]])
     np.savetxt(path, stack, delimiter=",", fmt="%.8g")
 
 
@@ -267,7 +271,9 @@ def write_shot(cache_dir: Path, shot_no: int, cfg: Optional[SyntheticConfig] = N
         if spec.diagnostic not in ("BasicDiagnostics", "PlasmaDetection") \
                 and spec.diagnostic not in diagnostics:
             continue
-        _write_csv(root / spec.path, t, data[key])
+        # MHDring-TM writes seconds upstream; reproduce that here.
+        scale = 1e-3 if spec.diagnostic == "MHDring-TM" else 1.0
+        _write_csv(root / spec.path, t, data[key], time_scale=scale)
 
     det = root / "Diagnostics" / "PlasmaDetection" / "Results"
     det.mkdir(parents=True, exist_ok=True)

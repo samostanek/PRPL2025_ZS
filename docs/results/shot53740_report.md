@@ -12,21 +12,21 @@
 
 ## 2. Diagnostics available on this shot
 
-| key        | diagnostic       | unit   |   n_samples |   dt_ms |   fs_kHz |   t_start_ms |   t_end_ms |         min |          max |         mean |
-|:-----------|:-----------------|:-------|------------:|--------:|---------:|-------------:|-----------:|------------:|-------------:|-------------:|
-| U_loop     | BasicDiagnostics | V      |       40000 | 0.001   | 1000     |   -0.7998    |    39.2    |  -2.791     |   15.7       |    4.699     |
-| Ip         | BasicDiagnostics | kA     |       40000 | 0.001   | 1000     |   -0.7998    |    39.2    |  -0.08095   |    7.658     |    3.225     |
-| Bt         | BasicDiagnostics | T      |       40000 | 0.001   | 1000     |   -0.7998    |    39.2    |  -4.794e-08 |    0.4305    |    0.3019    |
-| Ich        | BasicDiagnostics | kA     |       40000 | 0.001   | 1000     |   -0.7998    |    39.2    |   0         |    1.31      |    0.4847    |
-| dIp_dt     | PlasmaDetection  | kA/ms  |       40000 | 1e-06   |    1e+06 |   -0.0007998 |     0.0392 |  -1.038     |    2.04      |   -0.01221   |
-| dBt_dt     | PlasmaDetection  | T/ms   |       40000 | 1e-06   |    1e+06 |   -0.0007998 |     0.0392 |  -0.08188   |    0.822     |    0.1551    |
-| V_loop_pd  | PlasmaDetection  | V      |       40000 | 1e-06   |    1e+06 |   -0.0007998 |     0.0392 |  -2.791     |   15.7       |    4.715     |
-| V_null     | PlasmaDetection  | V      |       40000 | 1e-06   |    1e+06 |   -0.0007998 |     0.0392 |   0.01578   |    0.04391   |    0.03057   |
-| L_tot      | PlasmaDetection  | H      |       40000 | 1e-06   |    1e+06 |   -0.0007998 |     0.0392 |   0.009031  |    0.3752    |    0.1573    |
-| q_edge_Bt  | PlasmaDetection  | -      |       40000 | 1e-06   |    1e+06 |   -0.0007998 |     0.0392 |   9.38e-07  |    0.4585    |    0.3192    |
-| q_edge_Ip  | PlasmaDetection  | -      |       40000 | 1e-06   |    1e+06 |   -0.0007998 |     0.0392 | -93.11      | 8871         | 3580         |
-| ne_lav     | Interferometry   | m^-3   |       54402 | 0.00184 |  543.5   |   -5.846     |    93.95   |  -1.158e+17 |    8.144e+18 |    9.875e+17 |
-| ne_lav_raw | Interferometry   | m^-3   |       54403 | 0.00184 |  543.5   |   -5.846     |    93.95   |  -1.158e+17 |    5.732e+19 |    3.605e+19 |
+| key        | diagnostic       | unit   |   n_samples | time_rescaled   |   dt_ms |   fs_kHz |   t_start_ms |   t_end_ms |         min |          max |         mean |
+|:-----------|:-----------------|:-------|------------:|:----------------|--------:|---------:|-------------:|-----------:|------------:|-------------:|-------------:|
+| U_loop     | BasicDiagnostics | V      |       40000 | False           | 0.001   |   1000   |      -0.7998 |      39.2  |  -2.791     |   15.7       |    4.699     |
+| Ip         | BasicDiagnostics | kA     |       40000 | False           | 0.001   |   1000   |      -0.7998 |      39.2  |  -0.08095   |    7.658     |    3.225     |
+| Bt         | BasicDiagnostics | T      |       40000 | False           | 0.001   |   1000   |      -0.7998 |      39.2  |  -4.794e-08 |    0.4305    |    0.3019    |
+| Ich        | BasicDiagnostics | kA     |       40000 | False           | 0.001   |   1000   |      -0.7998 |      39.2  |   0         |    1.31      |    0.4847    |
+| dIp_dt     | PlasmaDetection  | kA/ms  |       40000 | True            | 0.001   |   1000   |      -0.7998 |      39.2  |  -1.038     |    2.04      |   -0.01221   |
+| dBt_dt     | PlasmaDetection  | T/ms   |       40000 | True            | 0.001   |   1000   |      -0.7998 |      39.2  |  -0.08188   |    0.822     |    0.1551    |
+| V_loop_pd  | PlasmaDetection  | V      |       40000 | True            | 0.001   |   1000   |      -0.7998 |      39.2  |  -2.791     |   15.7       |    4.715     |
+| V_null     | PlasmaDetection  | V      |       40000 | True            | 0.001   |   1000   |      -0.7998 |      39.2  |   0.01578   |    0.04391   |    0.03057   |
+| L_tot      | PlasmaDetection  | H      |       40000 | True            | 0.001   |   1000   |      -0.7998 |      39.2  |   0.009031  |    0.3752    |    0.1573    |
+| q_edge_Bt  | PlasmaDetection  | -      |       40000 | True            | 0.001   |   1000   |      -0.7998 |      39.2  |   9.38e-07  |    0.4585    |    0.3192    |
+| q_edge_Ip  | PlasmaDetection  | -      |       40000 | True            | 0.001   |   1000   |      -0.7998 |      39.2  | -93.11      | 8871         | 3580         |
+| ne_lav     | Interferometry   | m^-3   |       54402 | False           | 0.00184 |    543.5 |      -5.846  |      93.95 |  -1.158e+17 |    8.144e+18 |    9.875e+17 |
+| ne_lav_raw | Interferometry   | m^-3   |       54403 | False           | 0.00184 |    543.5 |      -5.846  |      93.95 |  -1.158e+17 |    5.732e+19 |    3.605e+19 |
 
 ## 3. Measured quantities
 
@@ -57,6 +57,11 @@
 | `precursor_ratio` | - | - | Mirnov activity growth before the collapse |
 | `m_est` | - | - | poloidal mode number of the precursor |
 | `f_mode_khz` | - | kHz | precursor frequency |
+| `n_ring_ok` | 0.000 | - | Mirnov ring coils usable (unclipped, alive) |
+| `m_quad` | - | - | mode number from the four quadrature coils |
+| `r_180` | - | - | correlation of coils half a turn apart |
+| `r_90` | - | - | correlation of coils a quarter turn apart |
+| `quad_margin` | - | - | how decisively the quadrature coils pick that mode |
 | `ring_asymmetry_growth` | - | - | growth of the m=1 displacement component |
 | `ne_step_rel` | -0.127 | - | density step per collapse |
 | `ne_mean` | 3.829e+18 | m^-3 | mean line-averaged density |

@@ -173,6 +173,35 @@ class GolemFetcher:
                     delay *= 2
         raise ConnectionError(f"failed to fetch {url}: {last_error}") from last_error
 
+    def head_size(self, shot: int, rel_path: str) -> Optional[int]:
+        """Size of a remote file in bytes without downloading it.
+
+        Diagnostics are sometimes configured but record nothing, leaving
+        zero-byte files behind; checking that with a HEAD is far cheaper than
+        pulling a megabyte of waveform to discover it is empty.
+
+        Returns ``None`` if the file does not exist or the server gives no
+        content length. Falls back to the cached copy in offline mode.
+        """
+        path = self.cache_path(shot, rel_path)
+        if path.exists():
+            return path.stat().st_size
+        if self.config.offline:
+            return None
+        try:
+            self.n_requests += 1
+            response = self._session.head(self.url(shot, rel_path),
+                                          timeout=self.config.timeout,
+                                          allow_redirects=True)
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            length = response.headers.get("Content-Length")
+            return int(length) if length is not None else None
+        except (requests.RequestException, ValueError) as exc:
+            logger.debug("HEAD %s failed: %s", rel_path, exc)
+            return None
+
     # --------------------------------------------------------------- helpers
     def latest_shot(self) -> int:
         """Resolve the ``shot=0`` alias to a concrete shot number."""

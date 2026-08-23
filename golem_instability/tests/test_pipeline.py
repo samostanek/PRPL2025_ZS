@@ -203,3 +203,16 @@ def test_chamber_correction_metrics_flag_a_processing_artefact(tmp_path):
     assert artefact["dip_ratio_dyn_pub"] < 0.4
     assert circuit["dip_ratio_dyn_pub"] > 0.8
     assert artefact_scores["H7"] > circuit_scores["H7"]
+
+
+def test_seconds_time_axis_is_detected_and_rescaled(fetcher):
+    """MHDring-TM writes seconds, not the documented milliseconds."""
+    shot = Shot(99002, fetcher)
+    ring = shot.signal("mhd_01")
+    basic = shot.signal("U_loop")
+    assert ring is not None and basic is not None
+    assert ring.time_rescaled and not basic.time_rescaled
+    # after rescaling both diagnostics must share the same time base
+    assert ring.t[0] == pytest.approx(basic.t[0], abs=0.05)
+    assert ring.t[-1] == pytest.approx(basic.t[-1], abs=0.05)
+    assert shot.inventory().set_index("key").loc["mhd_01", "time_rescaled"]

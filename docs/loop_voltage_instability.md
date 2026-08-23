@@ -200,10 +200,10 @@ decisive check for H5 did its job — it refuted the hypothesis it was built for
 
 ## 7. What is still open
 
-- **No Mirnov data on any of these shots.** The precursor mode number is the
-  single most valuable missing measurement: m = 2/n = 1 would settle "minor
-  disruption", m = 1/n = 1 would make it a sawtooth crash. `MHDring-TM` ran on
-  other shots — repeating this regime with it on stage is the obvious next run.
+- **No Mirnov data on any of these shots**, and §7a shows the archive cannot
+  supply it: the ring recorded nothing in this campaign, and where it did
+  record, the instability is weaker and the ring is not calibrated well enough
+  to give a trustworthy mode number. The m = 2 versus m = 1 question is open.
 - **No fast spectroscopy**, so H4's lead/lag test is untested.
 - **q_0 is not measured**, so "the profile finished penetrating" is an
   inference from the I_p/I_p,max law, not a direct observation. A diamagnetic
@@ -211,6 +211,71 @@ decisive check for H5 did its job — it refuted the hypothesis it was built for
   and constrain l_i independently.
 - The 37 candidates span only two sessions; a wider scan (`--since-days 365`)
   would show whether the I_p/I_p,max law holds generally.
+
+## 7a. The Mirnov survey: the decisive measurement is missing from the archive
+
+§7 named the precursor mode number as the most valuable missing measurement.
+It was searched for directly.
+
+**Survey.** `MHDring-TM` is listed as active on **231 plasma shots** in the
+sampled range (June–August 2026). Of those, **206 have real ring data** — but
+**all 20 shots of the August campaign** (sessions 53712, 53714 and 53747, the
+same run as #53740) have **zero-byte** `ring_*.csv`, `U_mc*.csv` and
+`LimSaddleCoil.csv`. The upstream `DAS_raw_data_dir/rawData.csv` is absent
+there too (19 MB on a working shot), and `ErrorLog` is empty, so the NI-6133
+acquisition failed silently and nothing can be recovered. **In the regime where
+this instability is fully developed, the Mirnov ring never recorded.**
+
+**Nearest usable shots.** Running the detector over the 206 shots that do have
+ring data gives 42 with at least one collapse and 9 candidates, of which 11
+have ≥ 2 events. These are a *weaker* version of the phenomenon — 2–3 events
+per shot against 10 on #53740 — and their precursors are correspondingly faint
+(`precursor_ratio` median 1.23, range 0.90–1.75, i.e. barely above the quiet
+level).
+
+**Mode number: not determined, and the reason matters.** Three obstacles, all
+in the diagnostic rather than the physics:
+
+- the 16 ring channels are **not gain-matched** — RMS spans 0.10–1.78 V on one
+  shot, an 18× range — and several clip at the ±10 V digitiser rail;
+- `MHDring-TM.sh` shows `ring_i` is simply DAS column *i+1*, with **no
+  documented mapping from channel index to poloidal angle**, so the equispaced
+  assumption behind a phase-slope fit is unverified;
+- consequently the fitted `m` is not robust: it moves from ≈1.9 to ≈0.3 purely
+  on analysis choices (frequency band, per-coil normalisation).
+
+A gain-insensitive cross-check was therefore built from the four separately
+wired quadrature coils `U_mc1/5/9/13` (0°, 90°, 180°, 270°, one amplifier
+group), where the mode number follows from two correlations alone —
+`r_180 = corr(mc1, mc9)` and `r_90 = corr(mc1, mc5)` — with
+`(+1, +1) → m = 0`, `(−1, 0) → m = 1`, `(+1, −1) → m = 2`. Across the 11 shots
+it returns weak correlations (`r_180` 0.24–1.00, `r_90` −0.00–0.78) that sit
+closest to **m = 0** in 8 of 11 shots but never near the ideal ±1 values. Read
+honestly: **there is no dominant coherent rotating mode in the 2–50 kHz band
+before these crashes**, at least not in these weak-instability shots.
+
+So the m = 2/n = 1 (minor disruption) versus m = 1/n = 1 (sawtooth) question
+**remains open**. What was learned is that it cannot be answered from the
+existing archive, and exactly what a future run must fix.
+
+**What the June/July shots *do* independently confirm.** They are a different
+campaign, different sessions, different toroidal field and a different
+diagnostic set from #53740, and they reproduce both key results:
+
+| quantity | August campaign (#53740 et al.) | June/July MHD shots |
+|---|---|---|
+| I_p/I_p,max at onset | 0.963, IQR/median 3.1 % (n = 37) | **0.974, IQR/median 1.1 %** (n = 10) |
+| Δl_i per crash | −0.072 | −0.036 (range −0.071 … +0.13) |
+
+The onset law is therefore not an artefact of one campaign.
+
+**Recommended next run.** Repeat the August regime (`PlasmaRegimeOptimization`
+settings: U_CD = 400 V, U_Bt = 800 V, H₂ at p = 13) with `MHDring-TM`
+*verified to be acquiring* — the failure is silent, so check that
+`ring_1.csv` is non-zero before trusting the shot. Worth fixing at the same
+time: gain-match the ring channels or publish their calibration, and document
+the channel-to-poloidal-angle map. Adding `Diamagnetism` would give the stored
+energy and constrain l_i independently, and `FastSpectrometry` would settle H4.
 
 ## 8. Reproducing this
 
@@ -220,6 +285,14 @@ pip install -r golem_instability/requirements.txt
 python -m golem_instability shot 53740 --outdir out/
 python -m golem_instability scan --from 53500 --to 53761 --outdir out/
 python -m golem_instability selftest        # offline pipeline validation
+
+# find shots carrying a given diagnostic before pulling any waveform
+python -c "
+from golem_instability import GolemFetcher, FetcherConfig
+from golem_instability.scan import scan_diagnostics
+f = GolemFetcher(FetcherConfig(cache_dir='golem_cache'))
+d = scan_diagnostics(f, range(53000, 53762), required=('MHDring-TM',))
+print(d.groupby('session_id').size())"
 ```
 
 The scan writes `scan.csv`, `onset_conditions.csv`, `scan_report.md` (with the

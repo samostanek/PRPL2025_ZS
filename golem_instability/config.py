@@ -62,6 +62,9 @@ class SignalSpec:
         label: Human readable label used in plot legends.
         group: Coarse category, used to lay figures out and to decide which
             signals participate in which hypothesis test.
+        time_scale_ms: Multiplier from the file's time column to milliseconds.
+            Almost every diagnostic already writes ms, but MHDring-TM writes
+            **seconds**, so the convention cannot be assumed.
     """
 
     key: str
@@ -70,11 +73,13 @@ class SignalSpec:
     unit: str
     label: str
     group: str
+    time_scale_ms: float = 1.0
 
 
-def _spec(key: str, diagnostic: str, rel: str, unit: str, label: str, group: str) -> SignalSpec:
+def _spec(key: str, diagnostic: str, rel: str, unit: str, label: str, group: str,
+          time_scale_ms: float = 1.0) -> SignalSpec:
     path = f"Diagnostics/{diagnostic}/{rel}" if diagnostic else rel
-    return SignalSpec(key, diagnostic, path, unit, label, group)
+    return SignalSpec(key, diagnostic, path, unit, label, group, time_scale_ms)
 
 
 def _build_registry() -> Dict[str, SignalSpec]:
@@ -118,9 +123,22 @@ def _build_registry() -> Dict[str, SignalSpec]:
         _spec("U_rog_coil", "Diamagnetism", "U_rog-coil.csv", "V", "Rogowski coil", "energy"),
     ]
     # Mirnov ring: 16 coils, dB/dt at fixed poloidal positions.
+    # MHDring-TM (and, on some shots, PlasmaDetection, FastSpectrometry,
+    # Diamagnetism and the probes) write their time column in SECONDS rather
+    # than the documented milliseconds. That is detected per file at load time
+    # rather than hard-coded here, so both conventions load correctly - see
+    # `shotdata.parse_signal_csv` and the `time_rescaled` flag it sets.
     specs += [
         _spec(f"mhd_{i:02d}", "MHDring-TM", f"ring_{i}.csv", "V", f"Mirnov {i}", "mhd")
         for i in range(1, 17)
+    ]
+    specs += [
+        _spec(f"mc_{i:02d}", "MHDring-TM", f"U_mc{i}.csv", "V", f"Mirnov coil {i}", "mhd")
+        for i in (1, 5, 9, 13)
+    ]
+    specs += [
+        _spec("lim_saddle", "MHDring-TM", "LimSaddleCoil.csv", "V", "limiter saddle coil", "mhd"),
+        _spec("U_loop_c", "MHDring-TM", "U_loop_c.csv", "V", r"$U_{loop}$ (MHD ref.)", "mhd"),
     ]
     # Edge probes.
     specs += [

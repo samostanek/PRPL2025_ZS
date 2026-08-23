@@ -339,3 +339,73 @@ def onset_criterion_test(conditions: pd.DataFrame) -> pd.DataFrame:
                      "relative_spread": abs(iqr / median) if median else np.nan})
     frame = pd.DataFrame(rows)
     return frame.sort_values("relative_spread").reset_index(drop=True) if not frame.empty else frame
+
+
+def scan_diagnostics(fetcher: GolemFetcher, shots: Sequence[int],
+                     required: Sequence[str] = (),
+                     require_plasma: bool = True, workers: int = 8,
+                     progress_every: int = 50) -> pd.DataFrame:
+    """Cheap sweep for *which diagnostics ran*, before touching any waveform.
+
+    Only the three ``Production/Diagnostics_*`` lists, ``b_plasma`` and the
+    shot date are fetched - a few hundred bytes per shot - so a range of
+    thousands of shots can be surveyed at negligible cost. Use it to find the
+    shots that carry the diagnostic a hypothesis needs (a Mirnov ring for a
+    mode number, fast spectroscopy for a radiation lead/lag) and only then run
+    the full detector on those.
+
+    Args:
+        fetcher: Fetcher (cached).
+        shots: Shot numbers to survey.
+        required: Diagnostic folder names that must all be present; empty
+            surveys everything.
+        require_plasma: Skip shots whose ``b_plasma`` flag is not set.
+        workers: Thread pool size.
+        progress_every: Log a progress line every N shots.
+
+    Returns:
+        One row per existing shot: ``shot_no``, ``shot_date``, ``session_id``,
+        ``has_plasma``, ``diagnostics`` and one boolean column per required
+        name. Filtered to the shots that satisfy ``required``.
+    """
+    rows: List[Dict[str, object]] = []
+
+    def work(shot_no: int) -> Optional[Dict[str, object]]:
+        shot = Shot(shot_no, fetcher)
+        try:
+            if not shot.exists():
+                return None
+            active = shot.active_diagnostics
+            if required and not set(required).issubset(active):
+                return None
+            plasma = shot.has_plasma()
+            if require_plasma and not plasma:
+                return None
+            meta = shot.meta
+            row: Dict[str, object] = {
+                "shot_no": shot_no,
+                "shot_date": meta.get("shot_date", ""),
+                "session_id": meta.get("session_id", ""),
+                "comment": meta.get("comment", ""),
+                "has_plasma": plasma,
+                "diagnostics": ",".join(active),
+            }
+            for name in required:
+                row[name] = name in active
+            return row
+        except Exception as exc:
+            logger.warning("shot %d: diagnostic survey failed (%s)", shot_no, exc)
+            return None
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(work, s): s for s in shots}
+        for i, future in enumerate(as_completed(futures), start=1):
+            row = future.result()
+            if row is not None:
+                rows.append(row)
+            if progress_every and i % progress_every == 0:
+                logger.info("surveyed %d/%d shots, %d match (%d requests)",
+                            i, len(futures), len(rows), fetcher.n_requests)
+
+    frame = pd.DataFrame(rows)
+    return frame.sort_values("shot_no").reset_index(drop=True) if not frame.empty else frame

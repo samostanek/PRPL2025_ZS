@@ -29,6 +29,10 @@ class Signal:
         unit: Physical unit of ``y``.
         label: Legend label.
         group: Category from the registry (``basic``, ``mhd``, ...).
+        time_rescaled: True when the file's time column was not in the
+            documented milliseconds and had to be converted. Several
+            diagnostics write seconds on some shots, so this is tracked rather
+            than assumed; :meth:`Shot.inventory` reports it per signal.
     """
 
     key: str
@@ -37,6 +41,7 @@ class Signal:
     unit: str = ""
     label: str = ""
     group: str = ""
+    time_rescaled: bool = False
 
     def __post_init__(self) -> None:
         self.t = np.asarray(self.t, dtype=float)
@@ -63,7 +68,8 @@ class Signal:
     def window(self, t0: float, t1: float) -> "Signal":
         """Restrict to ``t0 <= t <= t1`` (ms)."""
         m = (self.t >= t0) & (self.t <= t1)
-        return Signal(self.key, self.t[m], self.y[m], self.unit, self.label, self.group)
+        return Signal(self.key, self.t[m], self.y[m], self.unit, self.label,
+                      self.group, self.time_rescaled)
 
     def at(self, times: Sequence[float]) -> np.ndarray:
         """Linear interpolation onto arbitrary times (NaN outside the range)."""
@@ -75,7 +81,8 @@ class Signal:
         """Subtract the mean of the pre-trigger samples (``t < t_ref``)."""
         pre = self.y[self.t < t_ref]
         offset = float(np.mean(pre)) if pre.size > 5 else 0.0
-        return Signal(self.key, self.t, self.y - offset, self.unit, self.label, self.group)
+        return Signal(self.key, self.t, self.y - offset, self.unit, self.label,
+                      self.group, self.time_rescaled)
 
     def to_series(self) -> pd.Series:
         return pd.Series(self.y, index=pd.Index(self.t, name="t_ms"), name=self.key)
@@ -98,10 +105,23 @@ def parse_signal_csv(raw: bytes, spec: Optional[SignalSpec] = None, key: str = "
     frame = frame.apply(pd.to_numeric, errors="coerce").dropna()
     if frame.empty:
         raise ValueError("no numeric rows in signal CSV")
+    t = frame["t"].to_numpy()
+    scale = spec.time_scale_ms if spec is not None else 1.0
+    t = t * scale
+    # Guard against the convention being violated by a diagnostic the registry
+    # does not know about: a record spanning less than a microsecond-scale
+    # "millisecond" is really seconds.
+    span = float(t[-1] - t[0]) if t.size > 1 else 0.0
+    rescaled = scale != 1.0
+    if scale == 1.0 and t.size > 100 and 0 < span < 1.0:
+        logger.debug("%s: time span %.3g looks like seconds, rescaling to ms",
+                     spec.key if spec else key, span)
+        t = t * 1e3
+        rescaled = True
     if spec is not None:
-        return Signal(spec.key, frame["t"].to_numpy(), frame["y"].to_numpy(),
-                      spec.unit, spec.label, spec.group)
-    return Signal(key or "signal", frame["t"].to_numpy(), frame["y"].to_numpy())
+        return Signal(spec.key, t, frame["y"].to_numpy(), spec.unit, spec.label,
+                      spec.group, rescaled)
+    return Signal(key or "signal", t, frame["y"].to_numpy(), time_rescaled=rescaled)
 
 
 #: Header keys of the Tektronix/Rigol multi-channel export used for raw dumps.
@@ -321,8 +341,11 @@ class Shot:
             logger.debug("shot %d: %s did not run", self.shot_no, spec.diagnostic)
         else:
             raw = self.fetcher.get_bytes(self.shot_no, spec.path)
-            if raw is None:
-                logger.debug("shot %d: %s missing", self.shot_no, spec.path)
+            if not raw:
+                # A zero-byte file means the diagnostic was configured but
+                # recorded nothing - common enough to be worth saying plainly.
+                logger.debug("shot %d: %s %s", self.shot_no, spec.path,
+                             "empty" if raw is not None else "missing")
             else:
                 try:
                     result = parse_signal_csv(raw, spec)
@@ -387,6 +410,7 @@ class Shot:
                 "diagnostic": spec.diagnostic or "-",
                 "unit": spec.unit,
                 "n_samples": len(sig),
+                "time_rescaled": sig.time_rescaled,
                 "dt_ms": sig.dt,
                 "fs_kHz": sig.fs_khz,
                 "t_start_ms": float(sig.t[0]),

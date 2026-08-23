@@ -666,64 +666,190 @@ def density_response(signals: Dict[str, Signal], events: pd.DataFrame,
             "ne_mean": float(np.nanmean(positive)) if positive.size else np.nan}
 
 
+def _healthy_ring(signals: Dict[str, Signal], window: Tuple[float, float],
+                  rail_volts: float = 10.0, max_rail_fraction: float = 0.01,
+                  min_rms: float = 1e-3) -> List[Tuple[int, Signal]]:
+    """Ring coils usable for a mode fit.
+
+    The GOLEM ring is not gain-matched - channel RMS spans more than an order
+    of magnitude on the same shot - and some channels clip at the digitiser
+    rail. Clipped and dead channels are dropped here; the surviving ones are
+    amplitude-normalised by the caller so that the loudest coil cannot decide
+    the fit on its own.
+    """
+    out: List[Tuple[int, Signal]] = []
+    for index, sig in _ring_signals(signals):
+        seg = sig.window(*window)
+        if len(seg) < 64:
+            continue
+        railed = float(np.mean(np.abs(np.abs(seg.y) - rail_volts) < 0.02 * rail_volts))
+        if railed > max_rail_fraction or float(np.std(seg.y)) < min_rms:
+            continue
+        out.append((index, sig))
+    return out
+
+
 def mirnov_mode_number(signals: Dict[str, Signal], events: pd.DataFrame,
-                       pre_ms: float = 0.5, min_coherence: float = 0.5,
-                       min_snr: float = 5.0) -> Dict[str, float]:
+                       pre_ms: float = 0.8, min_coherence: float = 0.5,
+                       min_snr: float = 5.0,
+                       f_band_khz: Tuple[float, float] = (2.0, 50.0)) -> Dict[str, float]:
     """Poloidal mode number from the Mirnov ring in the pre-collapse window.
 
-    The ring coils are assumed equispaced poloidally. The dominant pre-event
-    frequency is found from the coil-averaged spectrum; the cross-coil phase at
-    that frequency is unwrapped around the ring and its slope, in units of
-    ``2*pi`` per full turn, is the poloidal mode number ``m``. The result is
-    only reported when the phase fit is coherent and the spectral peak stands
-    clear of the background, otherwise noise would produce a random ``m``.
+    The ring coils are assumed equispaced poloidally. In the window before each
+    collapse the coil-averaged spectrum is searched **inside a physical band**
+    (2-50 kHz: a tearing mode in a small ohmic tokamak rotates at a few to a
+    few tens of kHz, while everything above that is dominated by pickup), each
+    coil is amplitude-normalised so the ring's large gain spread cannot skew
+    the result, and the cross-coil phase at the peak is unwrapped around the
+    ring. Its slope in units of ``2*pi`` per turn is the poloidal mode number.
+
+    The fit quality is the standard amplitude-weighted vector coherence
+    ``|sum a_k exp(i(phi_k - m theta_k))| / sum a_k``; the mode number is only
+    reported when that and the spectral SNR both clear their thresholds, since
+    unwrapped noise phases will otherwise return an arbitrary ``m``.
     """
     nan = {"m_est": np.nan, "f_mode_khz": np.nan, "mode_coherence": np.nan,
-           "mode_snr": np.nan}
-    coils = _ring_signals(signals)
-    if len(coils) < 6 or events.empty:
+           "mode_snr": np.nan, "n_ring_ok": 0.0}
+    if events.empty:
         return nan
+    span = (float(events["t_on"].min()) - 2.0, float(events["t_off"].max()) + 0.5)
+    coils = _healthy_ring(signals, span)
+    if len(coils) < 6:
+        return {**nan, "n_ring_ok": float(len(coils))}
+
     m_values, f_values, coherences, snrs = [], [], [], []
-    for t_on in events["t_on"]:
-        segs = []
-        for _, sig in coils:
-            mask = (sig.t >= t_on - pre_ms) & (sig.t < t_on)
+    for quiet_t0, _, lead_t0, t_on, _ in _event_windows(events, lead_ms=pre_ms,
+                                                        default_gap_ms=pre_ms + 1.0):
+        start = max(lead_t0, quiet_t0)
+        segs, positions = [], []
+        for index, sig in coils:
+            mask = (sig.t >= start) & (sig.t < t_on)
             if mask.sum() < 64:
                 segs = []
                 break
-            segs.append(sig.y[mask] - np.mean(sig.y[mask]))
+            block = sig.y[mask]
+            block = block - np.mean(block)
+            scale = float(np.std(block))
+            if scale <= 0:
+                segs = []
+                break
+            segs.append(block / scale)          # amplitude-normalise the ring
+            positions.append(index)
         if not segs:
             continue
-        n = min(len(s) for s in segs)
-        block = np.vstack([s[:n] for s in segs])
+        n = min(len(x) for x in segs)
+        block = np.vstack([x[:n] for x in segs])
         fs_khz = coils[0][1].fs_khz
         freqs = np.fft.rfftfreq(n, d=1.0 / fs_khz)
         spec = np.fft.rfft(block * np.hanning(n), axis=1)
         power = np.mean(np.abs(spec) ** 2, axis=0)
-        band = (freqs > 1.0) & (freqs < 200.0)
+        band = (freqs >= f_band_khz[0]) & (freqs <= f_band_khz[1])
         if not band.any():
             continue
         idx = int(np.argmax(np.where(band, power, 0)))
         snr = float(power[idx] / np.median(power[band]))
+        amplitude = np.abs(spec[:, idx])
         phases = np.unwrap(np.angle(spec[:, idx]))
-        positions = np.array([i for i, _ in coils], dtype=float)
-        fit = np.polyfit(positions, phases, 1)
-        residual = phases - np.polyval(fit, positions)
-        coherence = float(np.exp(-np.var(residual)))
-        m_values.append(fit[0] * len(RING_ANGLES) / (2 * np.pi))
+        angles = RING_ANGLES[np.asarray(positions) % len(RING_ANGLES)]
+        slope = np.polyfit(np.asarray(positions, dtype=float), phases, 1)[0]
+        m_est = slope * len(RING_ANGLES) / (2 * np.pi)
+        residual = phases - m_est * angles
+        coherence = float(np.abs(np.sum(amplitude * np.exp(1j * residual)))
+                          / np.sum(amplitude))
+        m_values.append(m_est)
         f_values.append(freqs[idx])
         coherences.append(coherence)
         snrs.append(snr)
     if not m_values:
-        return nan
+        return {**nan, "n_ring_ok": float(len(coils))}
     coherence = float(np.nanmedian(coherences))
     snr = float(np.nanmedian(snrs))
+    result = {"f_mode_khz": float(np.nanmedian(f_values)), "mode_coherence": coherence,
+              "mode_snr": snr, "n_ring_ok": float(len(coils))}
     if coherence < min_coherence or snr < min_snr:
-        return {"m_est": np.nan, "f_mode_khz": float(np.nanmedian(f_values)),
-                "mode_coherence": coherence, "mode_snr": snr}
-    return {"m_est": float(np.nanmedian(m_values)),
-            "f_mode_khz": float(np.nanmedian(f_values)),
-            "mode_coherence": coherence, "mode_snr": snr}
+        return {**result, "m_est": np.nan}
+    return {**result, "m_est": float(np.nanmedian(m_values))}
+
+
+#: The four separately-wired Mirnov coils, named after ring positions 1, 5, 9
+#: and 13 - i.e. 0, 90, 180 and 270 degrees poloidally.
+QUADRATURE_COILS: Tuple[str, ...] = ("mc_01", "mc_05", "mc_09", "mc_13")
+
+
+def mirnov_quadrature_mode(signals: Dict[str, Signal], events: pd.DataFrame,
+                           pre_ms: float = 0.8,
+                           f_band_khz: Tuple[float, float] = (2.0, 50.0)) -> Dict[str, float]:
+    """Poloidal mode number from the four quadrature Mirnov coils.
+
+    ``U_mc1``, ``U_mc5``, ``U_mc9`` and ``U_mc13`` sit a quarter turn apart and
+    share one amplifier group, so unlike the 16-coil ring - whose channel gains
+    differ by more than an order of magnitude and whose index-to-angle map is
+    undocumented - their *relative* behaviour is trustworthy.
+
+    For a mode of poloidal number ``m`` the band-passed signals satisfy
+    ``corr(theta) = cos(m * theta)``, so the two correlations
+
+    * ``r_180 = corr(mc1, mc9)``  (half a turn apart)
+    * ``r_90  = corr(mc1, mc5)``  (quarter turn apart)
+
+    separate the low mode numbers cleanly:
+
+    ===========  =======  ======  ===================================
+    mode         r_180    r_90    interpretation
+    ===========  =======  ======  ===================================
+    m = 0         +1       +1     axisymmetric - pickup or a real m=0
+    m = 1         -1        0     kink / sawtooth-like
+    m = 2         +1       -1     tearing / minor-disruption mode
+    ===========  =======  ======  ===================================
+
+    Reported as ``r_180``, ``r_90``, the implied ``m_quad`` (the best matching
+    row above) and ``quad_margin``, how much better that row fits than the
+    runner-up. A small margin means the coils cannot decide.
+    """
+    nan = {"r_180": np.nan, "r_90": np.nan, "m_quad": np.nan, "quad_margin": np.nan}
+    coils = {k: signals[k] for k in QUADRATURE_COILS if k in signals}
+    if len(coils) < 3 or events.empty or "mc_01" not in coils:
+        return nan
+
+    def band(sig: Signal, t0: float, t1: float) -> Optional[np.ndarray]:
+        seg = sig.window(t0, t1)
+        if len(seg) < 128:
+            return None
+        nyq = 0.5 * seg.fs_khz
+        lo, hi = f_band_khz[0] / nyq, min(f_band_khz[1] / nyq, 0.95)
+        if not (0 < lo < hi < 1):
+            return None
+        b, a = sps.butter(4, [lo, hi], btype="band")
+        return sps.filtfilt(b, a, seg.y - np.mean(seg.y))
+
+    r180s, r90s = [], []
+    for quiet_t0, _, lead_t0, t_on, _ in _event_windows(events, lead_ms=pre_ms,
+                                                        default_gap_ms=pre_ms + 1.0):
+        t0 = max(lead_t0, quiet_t0)
+        ref = band(coils["mc_01"], t0, t_on)
+        if ref is None:
+            continue
+        for key, store in (("mc_09", r180s), ("mc_05", r90s)):
+            if key not in coils:
+                continue
+            other = band(coils[key], t0, t_on)
+            if other is None:
+                continue
+            n = min(ref.size, other.size)
+            denom = np.std(ref[:n]) * np.std(other[:n])
+            if denom > 0:
+                store.append(float(np.mean(ref[:n] * other[:n]) / denom))
+    if not r180s:
+        return nan
+    r180 = float(np.nanmedian(r180s))
+    r90 = float(np.nanmedian(r90s)) if r90s else np.nan
+    if not np.isfinite(r90):
+        return {"r_180": r180, "r_90": np.nan, "m_quad": np.nan, "quad_margin": np.nan}
+    templates = {0: (1.0, 1.0), 1: (-1.0, 0.0), 2: (1.0, -1.0), 3: (-1.0, 0.0)}
+    errors = {m: abs(r180 - a) + abs(r90 - b) for m, (a, b) in templates.items() if m != 3}
+    ranked = sorted(errors.items(), key=lambda kv: kv[1])
+    return {"r_180": r180, "r_90": r90, "m_quad": float(ranked[0][0]),
+            "quad_margin": float(ranked[1][1] - ranked[0][1])}
 
 
 def ring_asymmetry(signals: Dict[str, Signal], events: pd.DataFrame,
@@ -931,6 +1057,21 @@ def score_hypotheses(metrics: Dict[str, float], available: Sequence[str]) -> Lis
         ev.append(f"MHD precursor ratio = {prec:.2f} - a tearing mode must grow before each crash")
     else:
         missing.append("MHDring-TM")
+    m_quad = get("m_quad")
+    quad_margin = get("quad_margin")
+    if np.isfinite(m_quad) and quad_margin > 0.5:
+        if m_quad in (1.0, 2.0):
+            votes.append(0.8)
+            weights.append(2.0)
+            ev.append(f"quadrature Mirnov coils give m = {m_quad:.0f} "
+                      f"(r_180 = {get('r_180'):+.2f}, r_90 = {get('r_90'):+.2f}, "
+                      f"margin {quad_margin:.2f}) - a rotating low-m mode before the crash")
+        else:
+            votes.append(-0.4)
+            weights.append(1.2)
+            ev.append(f"quadrature Mirnov coils give m = 0 (r_180 = {get('r_180'):+.2f}, "
+                      f"r_90 = {get('r_90'):+.2f}) - the pre-crash magnetic signal is "
+                      f"axisymmetric, so no rotating tearing mode dominates")
     m_est = get("m_est")
     if np.isfinite(m_est):
         votes.append(0.8 if abs(abs(m_est) - 2.0) < 0.6 else 0.0)
@@ -1158,6 +1299,7 @@ def analyse_shot(shot: Shot, result: DetectionResult,
     window = (float(result.t[0]), float(result.t[-1])) if result.t.size else None
     metrics.update(density_response(signals, events, window))
     metrics.update(mirnov_mode_number(signals, events))
+    metrics.update(mirnov_quadrature_mode(signals, events))
     metrics.update(ring_asymmetry(signals, events))
     metrics.update(periodicity_spectrum(result))
     metrics.update(staircase_metrics(result, signals.get("Ip")))
