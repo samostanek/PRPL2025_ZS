@@ -204,7 +204,7 @@ def generate(cfg: Optional[SyntheticConfig] = None) -> Dict[str, np.ndarray]:
         "U_loop": u_loop,
         "Ip": ip,
         "Bt": bt,
-        "Ich": i_chamber_resistive * 1e3 + rng.normal(0, 0.2, t.size),  # kA -> A
+        "Ich": i_chamber_resistive + rng.normal(0, 2e-4, t.size),  # published in kA
         "ne_lav": ne,
         "Halpha": h_alpha + rng.normal(0, 0.01, t.size),
         "CII_514": impurity + rng.normal(0, 0.01, t.size),

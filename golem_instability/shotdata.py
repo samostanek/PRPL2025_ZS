@@ -287,6 +287,30 @@ class Shot:
         return params
 
     # -------------------------------------------------------------- signals
+    def discharge_settings(self) -> Dict[str, str]:
+        """Requested machine settings for this discharge, flattened.
+
+        The control system records the full ``Dirigent.sh`` invocation in
+        ``ShotLogbook``; it carries the subsystem arguments that the ``.setup``
+        files only name indirectly - capacitor-bank voltages, working gas and
+        pressure, and the position/current stabilisation waveforms. Keys are
+        prefixed with the subsystem, e.g. ``bt_ecd.U_cd``,
+        ``positionstabilization.radial_waveform``.
+        """
+        text = (self.fetcher.get_text(self.shot_no, "ShotLogbook") or "").replace("\\n", "\n")
+        settings: Dict[str, str] = {}
+        for subsystem, body in re.findall(
+                r'--(?:infrastructure|operation)\.(\w+)\s+"([^"]*)"', text):
+            # Values are either quoted (and may then contain commas and
+            # semicolons, as control waveforms do) or a bare token.
+            for key, quoted, bare in re.findall(
+                    r"(\w+)\s*=\s*(?:'([^']*)'|([^,\s]*))", body):
+                settings[f"{subsystem}.{key}"] = (quoted or bare).strip()
+        if not settings:
+            settings = {f"setup.{k}": v for k, v in self.setup_parameters().items()}
+        return settings
+
+
     def signal(self, key: str) -> Optional[Signal]:
         """Load one registry signal, or ``None`` if it is absent for this shot."""
         if key in self._signals:
@@ -380,6 +404,34 @@ class Shot:
                 f"  comment    : {meta.get('comment', '')}\n"
                 f"  diagnostics: {', '.join(self.active_diagnostics) or 'none listed'}\n"
                 f"  plasma     : {self.has_plasma()}")
+
+
+def parse_waveform(text: str) -> np.ndarray:
+    """Parse a control waveform of the form ``"1000,0;15000,0;25000,15"``.
+
+    The control system expresses waveforms as ``t_us,value`` breakpoints.
+
+    Returns:
+        ``(n, 2)`` array of ``[time_ms, value]``, empty when nothing parses.
+    """
+    points = []
+    for chunk in (text or "").split(";"):
+        parts = chunk.split(",")
+        if len(parts) != 2:
+            continue
+        try:
+            points.append((float(parts[0]) / 1e3, float(parts[1])))
+        except ValueError:
+            continue
+    return np.asarray(points, dtype=float) if points else np.empty((0, 2))
+
+
+def waveform_value(text: str, t_ms: float) -> float:
+    """Value of a control waveform at ``t_ms`` (linear between breakpoints)."""
+    points = parse_waveform(text)
+    if points.size == 0:
+        return float("nan")
+    return float(np.interp(t_ms, points[:, 0], points[:, 1]))
 
 
 def load_shot(shot_no: int, fetcher: Optional[GolemFetcher] = None) -> Shot:

@@ -38,7 +38,9 @@ class DetectionParams:
         env_quantile: Quantile taken inside that window (0.9 ≈ "typical high").
         enter_ratio: ``U/envelope`` below which a collapse starts.
         exit_ratio: ``U/envelope`` above which it ends (hysteresis).
-        min_duration_ms: Reject excursions shorter than this (noise).
+        min_duration_ms: Reject excursions shorter than this (noise). The real
+            events are fast - on GOLEM's 1 MHz basic diagnostics they last
+            ~10 us - so both this and ``smooth_ms`` are set in microseconds.
         min_gap_ms: Merge two events separated by less than this.
         smooth_ms: Width of the running median applied before thresholding.
         env_floor_frac: Ignore times where the envelope has fallen below this
@@ -49,13 +51,13 @@ class DetectionParams:
         min_depth: Mean relative depth required for a candidate.
     """
 
-    env_window_ms: float = 3.0
+    env_window_ms: float = 2.0
     env_quantile: float = 0.90
-    enter_ratio: float = 0.35
-    exit_ratio: float = 0.60
-    min_duration_ms: float = 0.05
-    min_gap_ms: float = 0.10
-    smooth_ms: float = 0.03
+    enter_ratio: float = 0.40
+    exit_ratio: float = 0.65
+    min_duration_ms: float = 0.004
+    min_gap_ms: float = 0.02
+    smooth_ms: float = 0.005
     env_floor_frac: float = 0.15
     edge_guard_ms: float = 0.30
     ip_level_ms: float = 0.30

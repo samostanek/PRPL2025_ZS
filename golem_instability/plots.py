@@ -328,3 +328,45 @@ def figure_set(shot: Shot, analysis: Dict[str, object], outdir: Path) -> List[Pa
         except Exception as exc:
             logger.warning("figure %s failed: %s", name, exc)
     return written
+
+
+def onset_criterion_figure(conditions: pd.DataFrame, path: Optional[Path] = None) -> Figure:
+    """Which quantity is constant when the instability starts?
+
+    One row per candidate trigger; each dot is one shot, plotted as the value
+    divided by that criterion's median, so all criteria share one axis and the
+    tightest cluster is the answer. A trigger that is a genuine threshold sits
+    on a narrow spike while the others spread out.
+    """
+    apply_style()
+    columns = [c for c in ("Ip_frac_of_max", "t_onset_ms", "flux_at_onset_mWb",
+                           "Ip_at_onset_kA", "q_a_at_onset", "ne_at_onset")
+               if c in conditions]
+    labels = {"Ip_frac_of_max": r"$I_p/I_{p,max}$", "t_onset_ms": "onset time",
+              "flux_at_onset_mWb": "delivered flux", "Ip_at_onset_kA": r"$I_p$",
+              "q_a_at_onset": r"$q_a$", "ne_at_onset": r"$\bar{n}_e$"}
+    fig, ax = plt.subplots(figsize=(9, 0.75 * len(columns) + 1.6))
+    for row, column in enumerate(columns):
+        values = pd.to_numeric(conditions[column], errors="coerce").dropna()
+        if values.empty:
+            continue
+        median = float(values.median())
+        if not median:
+            continue
+        scatter = (values / median).to_numpy()
+        jitter = np.linspace(-0.16, 0.16, scatter.size)
+        ax.scatter(scatter, np.full_like(scatter, row) + jitter,
+                   s=26, color=SERIES[row % len(SERIES)], alpha=0.85, lw=0)
+        iqr = float(values.quantile(0.75) - values.quantile(0.25)) / abs(median)
+        ax.text(2.05, row, f"IQR/median = {iqr * 100:.1f} %", va="center",
+                fontsize=9, color=INK_SECONDARY)
+    ax.axvline(1.0, color=INK_MUTED, lw=1.0, ls="--")
+    ax.set_yticks(range(len(columns)))
+    ax.set_yticklabels([labels.get(c, c) for c in columns])
+    ax.set_xlim(0, 2.6)
+    ax.set_xlabel("value at onset, divided by its median across shots")
+    ax.set_title("What is constant when the instability starts? "
+                 f"({len(conditions)} candidate shots)")
+    ax.invert_yaxis()
+    fig.tight_layout()
+    return _save(fig, path)

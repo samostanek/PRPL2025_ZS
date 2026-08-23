@@ -27,6 +27,12 @@ METRIC_GLOSSARY: List[tuple] = [
     ("R_pre_mOhm", "plasma resistance before the collapse", "mOhm"),
     ("R_in_mOhm", "plasma resistance during the collapse", "mOhm"),
     ("R_ratio", "resistance ratio in/before", ""),
+    ("R_test_valid", "1 when the freewheel assumption behind R_in holds", ""),
+    ("ip_spike_kA", "upward current spike at the event", "kA"),
+    ("ip_spike_rel", "the same, relative to the pre-event current", ""),
+    ("delta_li", "implied internal-inductance change at conserved flux", ""),
+    ("spike_fraction", "fraction of events showing the upward spike", ""),
+    ("u_undershoot_V", "depth of the loop-voltage spike below its pre-event level", "V"),
     ("tau_LR_est_ms", "L/R decay time implied by the collapse", "ms"),
     ("flux_before_onset", "flux delivered before the first collapse", "mWb"),
     ("flux_deficit_sum", "flux not delivered during the collapses", "mWb"),
@@ -180,8 +186,14 @@ def shot_report(shot: Optional[Shot], analysis: Dict[str, object],
     return "\n".join(lines) + "\n"
 
 
-def scan_report(scan: pd.DataFrame, min_score: float = 0.5) -> str:
-    """Markdown report for a cross-shot scan, including the volt-second test."""
+def scan_report(scan: pd.DataFrame, min_score: float = 0.5,
+                conditions: Optional[pd.DataFrame] = None) -> str:
+    """Markdown report for a cross-shot scan.
+
+    Includes the volt-second test and, when ``conditions`` is supplied (from
+    :func:`~golem_instability.scan.onset_conditions`), the onset-criterion
+    ranking that identifies what the instability is actually triggered by.
+    """
     from .scan import candidates  # imported here to avoid a cycle at import time
 
     cand = candidates(scan, min_score=min_score)
@@ -209,11 +221,32 @@ def scan_report(scan: pd.DataFrame, min_score: float = 0.5) -> str:
         f"- clustering ratio (onset CV / flux CV): {_fmt(flux['flux_clustering_ratio'])} "
         f"over {int(flux['n'])} shots",
         "",
+        "",
+        "## What is constant at onset?",
+        "",
+        (_onset_section(conditions) if conditions is not None and not conditions.empty
+         else "_run `scan.onset_conditions()` to fill this in_"),
+        "",
         "A ratio well above 1 means the onset is set by the flux the transformer has "
         "delivered rather than by the clock, which is what an iron core running into "
         "saturation would do. A ratio near or below 1 argues against H5.",
     ]
     return "\n".join(lines) + "\n"
+
+
+def _onset_section(conditions: pd.DataFrame) -> str:
+    from .scan import onset_criterion_test
+
+    ranking = onset_criterion_test(conditions)
+    if ranking.empty:
+        return "_not enough shots_"
+    lines = [
+        "Every candidate trigger, measured at the onset in every candidate shot. "
+        "The real threshold is the quantity that stays put while the others scatter.",
+        "",
+        ranking.to_markdown(index=False, floatfmt=".4g"),
+    ]
+    return "\n".join(lines)
 
 
 def write_report(text: str, path: Path) -> Path:

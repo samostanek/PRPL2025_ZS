@@ -320,10 +320,10 @@ def resistance_test(result: DetectionResult, ip: Optional[Signal],
     """
     events = result.events
     nan = {"R_in_mOhm": np.nan, "R_pre_mOhm": np.nan, "R_ratio": np.nan,
-           "tau_LR_est_ms": np.nan}
+           "tau_LR_est_ms": np.nan, "R_test_valid": 0.0}
     if ip is None or events.empty:
         return nan
-    r_in, r_pre = [], []
+    r_in, r_pre, slopes = [], [], []
     for _, ev in events.iterrows():
         t_on, t_off = float(ev["t_on"]), float(ev["t_off"])
         span = t_off - t_on
@@ -332,6 +332,7 @@ def resistance_test(result: DetectionResult, ip: Optional[Signal],
         if core.sum() < 3:
             continue
         slope_kA_per_ms = float(np.polyfit(ip.t[core], ip.y[core], 1)[0])
+        slopes.append(slope_kA_per_ms)
         ip_mid_A = float(np.median(ip.y[core])) * 1e3
         if ip_mid_A <= 0:
             continue
@@ -347,9 +348,14 @@ def resistance_test(result: DetectionResult, ip: Optional[Signal],
     r_in_m = float(np.nanmedian(r_in) * 1e3)
     r_pre_m = float(np.nanmedian(r_pre) * 1e3)
     tau = l_plasma / (np.nanmedian(r_in)) * 1e3 if np.nanmedian(r_in) > 0 else np.nan
+    # The freewheel picture only holds while the current is decaying. If I_p
+    # *rises* during the event the excursion is inductive (a profile
+    # rearrangement), the quasi-steady balance does not apply, and R_in is
+    # meaningless - so it is reported but flagged invalid.
+    valid = float(bool(slopes) and np.nanmedian(slopes) < 0)
     return {"R_in_mOhm": r_in_m, "R_pre_mOhm": r_pre_m,
             "R_ratio": r_in_m / r_pre_m if r_pre_m else np.nan,
-            "tau_LR_est_ms": float(tau)}
+            "tau_LR_est_ms": float(tau), "R_test_valid": valid}
 
 
 def chamber_current_model(t_ms: np.ndarray, u_loop: np.ndarray,
@@ -473,8 +479,9 @@ def chamber_correction_test(result: DetectionResult, signals: Dict[str, Signal]
         u_on_ich = np.interp(ich.t, result.t, result.u, left=np.nan, right=np.nan)
         mask = np.isfinite(u_on_ich) & (np.abs(ich.y) > 0.05 * np.nanmax(np.abs(ich.y)))
         if mask.sum() > 10:
+            # Ich is published in kA, so U[V] / I[kA] is already in mOhm.
             out["R_chamber_implied_mOhm"] = float(
-                np.nanmedian(u_on_ich[mask] / ich.y[mask]) * 1e3)
+                np.nanmedian(u_on_ich[mask] / ich.y[mask]))
 
     swing_kA = (events["u_env"] - events["u_min"]) / R_CHAMBER_OHM / 1e3
     out["chamber_swing_kA"] = float(np.nanmedian(swing_kA))
@@ -515,6 +522,63 @@ def chamber_correction_test(result: DetectionResult, signals: Dict[str, Signal]
             out["dip_ratio_irog_ip"] = float(irog_parts["dip"] / ip_parts["dip"])
             out["dip_ratio_dyn_pub"] = float(dyn_parts["dip"] / ip_parts["dip"])
     return out
+
+
+def inductance_drop_test(result: DetectionResult, ip: Optional[Signal],
+                         l_plasma: float = L_PLASMA_H,
+                         search_ms: float = 0.15) -> Dict[str, float]:
+    """Is the event a sudden internal-inductance drop (profile rearrangement)?
+
+    A fast internal reconnection redistributes the current without changing the
+    poloidal flux, so ``L I`` is conserved: the internal inductance falls and
+    the plasma current **spikes upwards**, while the core-mounted loop sees a
+    negative voltage spike as the secondary MMF suddenly opposes it. This is
+    the fingerprint of a sawtooth crash or a minor disruption, and it is the
+    opposite of a loss of drive, where the current only ever decays.
+
+    From ``Delta(L I) = 0`` the inductance change follows as
+    ``Delta L = -L Delta I / I``, and with the internal part
+    ``L_i = mu0 R0 l_i / 2`` that converts into a change of the internal
+    inductance parameter ``l_i``.
+
+    Reported:
+        ``ip_spike_kA`` / ``ip_spike_rel``  height of the current spike
+        ``delta_li``                        implied change of ``l_i``
+        ``spike_fraction``                  fraction of events showing it
+        ``u_undershoot_V``                  depth of the loop-voltage spike
+                                            below its pre-event level
+    """
+    nan = {"ip_spike_kA": np.nan, "ip_spike_rel": np.nan, "delta_li": np.nan,
+           "spike_fraction": np.nan, "u_undershoot_V": np.nan}
+    events = result.events
+    if ip is None or len(ip) < 16 or events.empty:
+        return nan
+    spikes, rels, undershoots = [], [], []
+    for t_on in events["t_on"]:
+        pre = ip.y[(ip.t >= t_on - 0.2) & (ip.t < t_on)]
+        during = ip.y[(ip.t >= t_on) & (ip.t <= t_on + search_ms)]
+        if pre.size < 3 or during.size < 3:
+            continue
+        base = float(np.median(pre))
+        spike = float(np.nanmax(during) - base)
+        spikes.append(spike)
+        if base > 0:
+            rels.append(spike / base)
+        u_pre = result.u[(result.t >= t_on - 0.2) & (result.t < t_on)]
+        u_in = result.u[(result.t >= t_on) & (result.t <= t_on + search_ms)]
+        if u_pre.size > 3 and u_in.size > 3:
+            undershoots.append(float(np.nanmin(u_in) - np.median(u_pre)))
+    if not spikes:
+        return nan
+    rel = float(np.nanmedian(rels)) if rels else np.nan
+    # L_i = mu0 * R0 * l_i / 2  ->  d(l_i) = 2 * dL / (mu0 * R0)
+    d_l = -l_plasma * rel if np.isfinite(rel) else np.nan
+    d_li = 2 * d_l / (4e-7 * np.pi * 0.40) if np.isfinite(d_l) else np.nan
+    return {"ip_spike_kA": float(np.nanmedian(spikes)),
+            "ip_spike_rel": rel,
+            "delta_li": float(d_li) if np.isfinite(d_li) else np.nan,
+            "spike_fraction": float(np.mean(np.asarray(spikes) > 0)),
+            "u_undershoot_V": float(np.nanmedian(undershoots)) if undershoots else np.nan}
 
 
 def machine_coherence(signals: Dict[str, Signal], events: pd.DataFrame,
@@ -578,11 +642,19 @@ def clipping_test(result: DetectionResult) -> Dict[str, float]:
             "u_floor": floor}
 
 
-def density_response(signals: Dict[str, Signal], events: pd.DataFrame) -> Dict[str, float]:
-    """Line-averaged density step per collapse and the shot mean density."""
+def density_response(signals: Dict[str, Signal], events: pd.DataFrame,
+                     window: Optional[Tuple[float, float]] = None) -> Dict[str, float]:
+    """Line-averaged density step per collapse and the mean density.
+
+    The mean is taken over ``window`` (the analysed part of the discharge) when
+    given; averaging the whole record would be dominated by the pre- and
+    post-discharge zeros.
+    """
     sig = signals.get("ne_lav")
     if sig is None or events.empty:
         return {"ne_step_rel": np.nan, "ne_mean": np.nan}
+    if window is not None:
+        sig = sig.window(*window)
     steps = []
     for t_on, t_off in zip(events["t_on"], events["t_off"]):
         pre = sig.y[(sig.t >= t_on - 0.5) & (sig.t < t_on)]
@@ -786,7 +858,16 @@ def score_hypotheses(metrics: Dict[str, float], available: Sequence[str]) -> Lis
 
     verdicts: List[HypothesisVerdict] = []
 
-    r_ratio = get("R_ratio")
+    r_ratio = get("R_ratio") if get("R_test_valid") > 0 else float("nan")
+    spike_rel = get("ip_spike_rel")
+    spike_frac = get("spike_fraction")
+    # A current spike is only treated as evidence when it is clear; its absence
+    # proves nothing, so no vote is cast then.
+    inductive = (np.isfinite(spike_rel) and np.isfinite(spike_frac)
+                 and spike_rel > 0.005 and spike_frac > 0.6)
+    inductive_note = (f"current spikes UP by {spike_rel * 100:.1f}% at "
+                      f"{spike_frac * 100:.0f}% of the events, implying "
+                      f"d(l_i) = {get('delta_li'):+.3f} at conserved flux")
     cv = get("period_cv")
     rail = get("rail_fraction")
     prec = get("precursor_ratio")
@@ -829,6 +910,11 @@ def score_hypotheses(metrics: Dict[str, float], available: Sequence[str]) -> Lis
         ev.append(f"MHD precursor ratio = {prec:.2f} - a circuit cause has no magnetic precursor")
     else:
         missing.append("MHDring-TM")
+    if inductive:
+        votes.append(-1.0)
+        weights.append(2.5)
+        ev.append(inductive_note + " - with the drive merely switched off the current "
+                  "can only decay, so an upward spike rules this out")
     if np.isfinite(ha_z):
         votes.append(0.6 if ha_z < Z_SIGNIFICANT else -0.6)
         weights.append(1.0)
@@ -864,6 +950,11 @@ def score_hypotheses(metrics: Dict[str, float], available: Sequence[str]) -> Lis
         votes.append(1.0 if r_ratio > 1.5 else -1.0)
         weights.append(2.0)
         ev.append(f"R_in/R_pre = {r_ratio:.2f} - a crash cools the plasma and raises its resistance")
+    if inductive:
+        votes.append(1.0)
+        weights.append(2.5)
+        ev.append(inductive_note + " - a sudden internal reconnection flattens the current "
+                  "profile at conserved poloidal flux, which is exactly this signature")
     if np.isfinite(ne_step):
         votes.append(0.6 if ne_step < -0.05 else -0.2)
         weights.append(1.0)
@@ -894,6 +985,11 @@ def score_hypotheses(metrics: Dict[str, float], available: Sequence[str]) -> Lis
         ev.append(f"mean density = {ne_mean:.2e} m^-3 - runaway generation needs a low-density plasma")
     else:
         missing.append("Interferometry")
+    if inductive:
+        votes.append(-0.8)
+        weights.append(2.0)
+        ev.append(inductive_note + " - an inductive spike at conserved flux explains the "
+                  "apparent resistance collapse without any runaway population")
     verdicts.append(HypothesisVerdict(
         "H3", "Runaway-electron dominated phases (resistance collapse and loss bursts)",
         _combine(votes, weights), ev, missing))
@@ -1055,10 +1151,12 @@ def analyse_shot(shot: Shot, result: DetectionResult,
     metrics: Dict[str, float] = dict(result.summary)
     metrics.update(mhd_precursor(signals, events))
     metrics.update(resistance_test(result, signals.get("Ip")))
+    metrics.update(inductance_drop_test(result, signals.get("Ip")))
     metrics.update(machine_coherence(signals, events))
     metrics.update(chamber_correction_test(result, signals))
     metrics.update(clipping_test(result))
-    metrics.update(density_response(signals, events))
+    window = (float(result.t[0]), float(result.t[-1])) if result.t.size else None
+    metrics.update(density_response(signals, events, window))
     metrics.update(mirnov_mode_number(signals, events))
     metrics.update(ring_asymmetry(signals, events))
     metrics.update(periodicity_spectrum(result))

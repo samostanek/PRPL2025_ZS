@@ -76,7 +76,13 @@ class GolemFetcher:
         self.n_cache_hits = 0
 
     # ------------------------------------------------------------------ paths
+    #: Directory listings are cached under this name inside the directory, so
+    #: that a listing and the directory it describes can coexist on disk.
+    DIR_INDEX_NAME = "_dirindex.html"
+
     def cache_path(self, shot: int, rel_path: str) -> Path:
+        if rel_path in ("", "/") or rel_path.endswith("/"):
+            rel_path = rel_path + self.DIR_INDEX_NAME
         return self.config.cache_dir / str(shot) / rel_path
 
     @staticmethod

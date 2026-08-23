@@ -22,7 +22,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
-BASE_URL: str = "http://golem.fjfi.cvut.cz"
+BASE_URL: str = "https://golem.fjfi.cvut.cz"
+
+#: GOLEM geometry: major radius and limiter (minor) radius in metres.
+MAJOR_RADIUS_M: float = 0.40
+MINOR_RADIUS_M: float = 0.085
 SHOTDIR_TEMPLATE: str = BASE_URL + "/shotdir/{shot}/"
 
 #: Files that are cheap enough to fetch for every shot while scanning.
@@ -79,7 +83,7 @@ def _build_registry() -> Dict[str, SignalSpec]:
         _spec("U_loop", "BasicDiagnostics", "Results/U_loop.csv", "V", r"$U_{loop}$", "basic"),
         _spec("Ip", "BasicDiagnostics", "Results/Ip.csv", "kA", r"$I_p$", "basic"),
         _spec("Bt", "BasicDiagnostics", "Results/Bt.csv", "T", r"$B_t$", "basic"),
-        _spec("Ich", "BasicDiagnostics", "Results/Ich.csv", "A", r"$I_{ch}$ (chamber)", "basic"),
+        _spec("Ich", "BasicDiagnostics", "Results/Ich.csv", "kA", r"$I_{ch}$ (chamber)", "basic"),
         # --- Derived plasma-detection traces ------------------------------------
         _spec("dIp_dt", "PlasmaDetection", "dIp_dt.csv", "kA/ms", r"$dI_p/dt$", "derived"),
         _spec("dBt_dt", "PlasmaDetection", "dBt_dt.csv", "T/ms", r"$dB_t/dt$", "derived"),

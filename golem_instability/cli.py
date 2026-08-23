@@ -26,9 +26,9 @@ from typing import List, Optional, Sequence
 from .analyze import analyse_shot
 from .detect import DetectionParams, detect_in_shot
 from .fetch import FetcherConfig, GolemFetcher
-from .plots import figure_set, scan_figure
+from .plots import figure_set, onset_criterion_figure, scan_figure
 from .report import scan_report, shot_report, write_report
-from .scan import candidates, scan_shots, summarise_scan
+from .scan import candidates, onset_conditions, scan_shots, summarise_scan
 from .shotdata import Shot
 
 logger = logging.getLogger("golem_instability")
@@ -107,7 +107,12 @@ def cmd_scan(args: argparse.Namespace) -> int:
     outdir.mkdir(parents=True, exist_ok=True)
     scan.to_csv(outdir / "scan.csv", index=False)
     print(summarise_scan(scan))
-    write_report(scan_report(scan, args.min_score), outdir / "scan_report.md")
+    conditions = onset_conditions(fetcher, candidates(scan, args.min_score))
+    if not conditions.empty:
+        conditions.to_csv(outdir / "onset_conditions.csv", index=False)
+        onset_criterion_figure(conditions, outdir / "onset_criterion.png")
+    write_report(scan_report(scan, args.min_score, conditions),
+                 outdir / "scan_report.md")
     if not scan.empty:
         scan_figure(scan, outdir / "scan_overview.png")
     if args.analyse_top:

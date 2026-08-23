@@ -1,319 +1,241 @@
 # Repetitive loop-voltage collapse on GOLEM
 
-*Working note for the instability first noticed on shot #53740, where roughly
-20 ms into the discharge the loop voltage begins repeatedly dropping to ~0 and
-recovering, with the plasma current stepping down a little each time.*
+*Analysis of the instability first noticed on shot #53740, where late in the
+discharge the loop voltage repeatedly drops to ~0 and recovers while the plasma
+current steps down.*
 
-> **Data status.** The analysis code in `golem_instability/` is complete and
-> validated end-to-end, but this session had no network route to
-> `golem.fjfi.cvut.cz` (blocked by the environment's egress policy), so **no
-> real shot data has been loaded and none of the numbers below are
-> measurements**. Everything here is either machine documentation, circuit
-> physics, or a prediction to be checked by running the toolkit. The commands
-> that produce the answers are given in §7.
+**Data basis.** Shot #53740 analysed in full, plus a scan of shots
+**53500–53761** (262 shots, 56 without plasma): 79 show at least one collapse
+and **37 are candidates**. All numbers below are measured. Reproduce with the
+commands in §8.
 
 ---
 
-## 1. What the two key signals actually are
+## 1. Summary of findings
 
-This matters more than usual, because the naive reading of the phenomenon
-("the plasma stopped being driven, so it lost current") assumes the two traces
-are independent measurements. On GOLEM they are not.
+1. The events are **fast**: 19–171 µs (median 42 µs, with one 0.9 ms
+   outlier at the end of the discharge), repeating every
+   **≈ 1.0 ms**, starting at 19.7 ms on #53740 and lasting to the end of the
+   discharge.
+2. They are **not** a loss of drive. At each event the plasma current
+   **spikes upwards** by 1.5 % before decaying, the loop voltage undershoots to
+   **−2.3 V below its baseline** (i.e. genuinely negative, not a flat zero
+   floor: only 0.07 % of in-event samples sit on a rail), and the toroidal
+   field shows nothing at all. This is the signature of a **sudden internal
+   reconnection at conserved poloidal flux**, implying **Δl_i ≈ −0.07** per
+   crash.
+3. Each cycle: density accumulates → crash → **13 % of the density is
+   expelled**, the current profile flattens, the loop voltage stays ~1 V
+   elevated for ~0.5 ms and the current decays by **≈ 0.5 kA** → refuelling and
+   reheating → repeat.
+4. **The trigger is the end of the current ramp.** Across the 37 candidate
+   shots the instability starts when the plasma current reaches
+   **96.3 % of that shot's peak (IQR/median = 3.1 %)** — five times tighter
+   than any other candidate criterion. It is not set by the clock, the
+   delivered flux, the density, the edge safety factor, or the position
+   stabilisation.
+5. My pre-data prior (circuit-side: thyristor drop-out or core saturation) is
+   **wrong** and the measurements say so explicitly — see §6.
 
-**Loop voltage.** `U_loop` comes from *a coil wound around the transformer
-core*, not from a flux loop threading the plasma. It measures the core's
-`dΦ/dt`, i.e. the electromotive force the transformer is delivering to
-everything linked by the core: the plasma ring, the vacuum vessel, and any
-other conducting path. So `U_loop → 0` means **the transformer stopped changing
-its flux**, which is a statement about the primary circuit and the core first,
-and about the plasma only through back-reaction.
+## 2. What the two key signals are
 
-**Plasma current.** The Rogowski coil sits around the vessel and therefore
-measures the *total* toroidal current: plasma plus the current induced in the
-stainless-steel chamber. The published `Ip` is obtained by subtracting the
-chamber contribution, estimated resistively as
+**Loop voltage** comes from *a coil around the transformer core*, not a flux
+loop through the plasma: it measures the core's dΦ/dt, i.e. the EMF delivered
+to everything linked by the core. A sudden *increase* of the secondary
+(plasma) current therefore drives a **negative** U_loop spike — which is
+exactly what is observed, and is the opposite of what a loss of drive looks
+like.
 
-```
-I_chamber = U_loop / R_chamber ,     R_chamber = 9.7 mΩ
-```
-
-Two consequences run through everything below:
-
-1. `Ip` **contains** `U_loop`. A step in `U_loop` writes a step into `Ip`
-   whether or not the plasma did anything. With a 5 V loop voltage the
-   correction term is `5/0.0097 ≈ 515 A`, which is the same order as the
-   "slight" current drops being reported.
-2. The chamber path has its own inductance, so its current relaxes on
-   `τ_ch = L_ch/R_ch ≈ 0.12 ms` (for `L_ch ~ 1.2 μH`). For transients faster
-   than that the resistive estimate is simply wrong, and the correction
-   over- or under-shoots at every edge.
-
-This is not a reason to dismiss the phenomenon — the loop-voltage collapse is
-certainly real — but the *size* of the current staircase has to be re-derived
-before it is interpreted. `analyze.chamber_correction_test()` does exactly
-that: it undoes the resistive correction to recover the raw Rogowski current,
-re-applies one that respects the chamber's `L/R`
-(`analyze.chamber_current_model()`), and reports how much of the staircase
-survives (`dip_ratio_dyn_pub`).
-
-## 2. Machine numbers used below
+**Plasma current** is the Rogowski signal minus a chamber-current correction
+estimated resistively as `I_ch = U_loop / R_chamber`. On #53740 this shot's own
+`Ich` trace gives `U_loop/Ich = 9.67 mΩ`, confirming the correction is exactly
+resistive with the documented `R_chamber ≈ 9.7 mΩ`. So `Ip` **contains**
+`U_loop`, and the chamber correction swings by **0.82 kA** at each event —
+larger than the current step being interpreted. This had to be ruled out
+before anything else; §6 (H7) shows it survives the check.
 
 | quantity | value | note |
 |---|---|---|
 | major / minor radius | R₀ = 0.4 m, a = 0.085 m | Mo poloidal limiter |
-| plasma current | I_p < 8 kA | |
-| toroidal field | B_t < 0.5 T typical (≤0.8 T possible) | 81 mF bank, ≤1.3 kV |
-| discharge length | τ_p < 25 ms | |
-| current-drive bank | C_CD = 11.3 mF, U_CD ≤ 700 V | thyristor-switched into the primary |
-| transformer | iron core | finite volt-second budget |
-| chamber resistance | R_chamber = 9.7 mΩ | used in the I_p correction |
-| plasma inductance | L_p ≈ 1.2 μH | μ₀R₀(ln(8R₀/a) − 1.75 + lᵢ/2) |
-| ohmic resistance | R_p ≈ U_loop/I_p ≈ 3–5 mΩ | at 15 V / 4 kA |
-| plasma L/R | ≈ 0.3 ms | sets how fast I_p decays with the drive off |
+| #53740 settings | U_CD = 400 V, U_Bt = 800 V, H₂ at p = 13 | from the logged `Dirigent.sh` line |
+| #53740 plasma | I_p^max = 7.66 kA, B_t = 0.43 T, 4.2–30.0 ms | |
+| chamber resistance | 9.67 mΩ (measured), 9.7 mΩ (documented) | |
+| plasma inductance | L_p ≈ 1.2 µH | μ₀R₀(ln(8R₀/a) − 1.75 + lᵢ/2) |
+| plasma resistance | 0.79 mΩ before onset, 1.01 mΩ after | +28 % |
+| line-averaged density | 3.2·10¹⁸ before onset, 6.5·10¹⁸ after | roughly doubles |
 
-The plasma `L/R` of ~0.3 ms is the single most useful number: with the drive
-removed, the current decays by ~3 % per 10 μs. A collapse lasting 100 μs
-therefore costs of order 30 % of the current *if the plasma resistance is
-unchanged*, and correspondingly more if the plasma also cooled. Measuring the
-actual decay rate inside the collapse is what turns this into a diagnostic.
+## 3. What one event looks like
 
-## 3. The circuit equation, and what "U_loop = 0" implies
+Event-triggered average over the 10 collapses of #53740, baseline removed,
+lag in ms relative to the onset:
 
-For the plasma ring,
+| lag | −0.30 | −0.10 | −0.01 | +0.01 | +0.03 | +0.10 | +0.40 | +0.80 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| ΔU_loop [V] | +0.21 | −0.53 | −0.79 | **−2.33** | −1.87 | +0.66 | +1.10 | −0.40 |
+| ΔI_p [kA] | −0.00 | −0.01 | −0.01 | +0.02 | **+0.048** | −0.02 | −0.33 | **−0.44** |
+| Δn̄_e [10¹⁸ m⁻³] | +0.02 | **+0.25** | −0.28 | −0.43 | −0.58 | **−1.02** | −0.43 | +0.05 |
+| ΔB_t [T] | 0.000 | 0.001 | 0.001 | 0.001 | 0.002 | 0.002 | 0.004 | 0.006 |
 
-```
-U_loop = R_p I_p + L_p dI_p/dt
-```
+Read as a cycle:
 
-so inside a collapse, where `U_in ≈ 0`,
+1. **Ramp (−1.0 to −0.05 ms).** The density climbs and the current rises; the
+   loop voltage sags slightly as the profile peaks.
+2. **Crash (0 to +0.05 ms).** U_loop plunges 2.3 V below baseline for a few
+   tens of µs while I_p spikes **up** by 48 A. Conserving `L·I` gives
+   `ΔL = −L·ΔI/I ≈ −0.018 µH`, i.e. **Δl_i ≈ −0.07** — a modest, entirely
+   plausible flattening of the current profile.
+3. **Expulsion (+0.05 to +0.15 ms).** The line-averaged density falls by
+   ~1.0·10¹⁸ m⁻³ (13 %).
+4. **Recovery (+0.1 to +0.8 ms).** U_loop sits ~1 V *above* its old baseline —
+   the plasma is more resistive, having cooled — and I_p decays by 0.44 kA.
+   The density refills and the cycle repeats after ~1 ms.
 
-```
-R_in = (U_in − L_p dI_p/dt) / I_p
-```
+B_t does nothing but drift smoothly through all of it: **no machine circuit is
+switching in step with these events.**
 
-is directly measurable, and can be compared with the pre-collapse ohmic value
-`R_pre ≈ U_env/I_p`. The ratio `R_in/R_pre` is the primary fork in the road:
+## 4. The cross-shot trigger
 
-| `R_in/R_pre` | reading |
-|---|---|
-| ≈ 1 | the plasma is unchanged; it simply lost its drive → **circuit-side cause** |
-| ≫ 1 | the plasma cooled or disrupted → **plasma-side cause** |
-| ≪ 1 | the resistance collapsed → **runaway-dominated current** |
+Every candidate trigger was measured at the onset in all 37 candidate shots.
+The real threshold is whichever one stays put while the others scatter
+(scatter as interquartile range over median, robust to the few shots whose
+onset is caught unusually early or late):
 
-This is `analyze.resistance_test()`. Note that `R_in` scales linearly with the
-assumed `L_p`, so a factor-of-2 error in `L_p` matters for the absolute value
-but not for telling ~1 from ≫1.
+| criterion at onset | n | median | IQR/median |
+|---|---:|---:|---:|
+| **I_p / I_p,max** | 37 | **0.963** | **3.1 %** |
+| onset time | 37 | 17.98 ms | 14.8 % |
+| B_t | 37 | 0.368 T | 17.7 % |
+| delivered flux ∫U dt | 37 | 78.6 mWb | 18.6 % |
+| I_p | 37 | 6.72 kA | 20.2 % |
+| q_a | 37 | 4.94 | 40.3 % |
+| n̄_e | 27 | 6.0·10¹⁸ m⁻³ | 79.7 % |
 
-## 4. What to measure (the characterisation)
+The instability starts when the plasma current has essentially finished
+rising, in shots spanning two sessions with very different toroidal fields
+(B_t ≈ 0.51 T in the July session, ≈ 0.36 T in August) and hence very different
+edge safety factors (q_a ≈ 7.5 versus ≈ 4.5). Neither q_a nor the density is
+the threshold; the approach to the current flat-top is.
 
-`detect.detect_collapses()` finds the events as excursions of `U_loop` below a
-fraction of its own running upper envelope — envelope-relative rather than
-absolute, because `U_loop` decays throughout the discharge and a fixed
-threshold would either miss early events or fire on the natural end-of-shot
-tail. For each event it reports onset, duration, depth, the missing flux
-`∫(U_env − U) dt`, the current step, and the implied `L/R`. Shot-level it
-reports the repetition period and its coefficient of variation, the duty cycle,
-the staircase fraction, and the flux delivered before the first event.
+That is the classic condition for the **ohmic current profile to finish
+penetrating**. During the ramp the profile is skin-like and the central safety
+factor is high; once dI_p/dt → 0 the current diffuses inward resistively, the
+profile peaks, and the plasma becomes unstable to internal reconnection. The
+relaxation cycle that follows is what clamps the profile.
 
-Across diagnostics (`analyze.analyse_shot()`), every trace gets an
-event-triggered average and a robust response measured in units of its own
-pre-event scatter, together with the **lead/lag of its first 3σ excursion
-relative to the collapse onset**. That lead/lag is the cause-versus-consequence
-discriminator: a quantity that rises *before* the loop voltage falls can be
-driving it; one that rises after is responding to it.
+## 5. Hypotheses and how each was decided
 
-## 5. Candidate mechanisms
+Seven mechanisms were scored against specific measurements (see
+`analyze.score_hypotheses`). The ranking on #53740:
 
-Ranked by how well they fit what is known so far. Each entry gives the
-signature that would confirm it and the measurement that kills it.
+| # | mechanism | score | verdict |
+|---|---|---:|---|
+| H2 | Repetitive minor disruptions / MHD relaxation | **+0.89** | supported |
+| H4 | Impurity-radiation / recycling limit cycle | +0.50 | supported (weakly — see below) |
+| H5 | Volt-second exhaustion / core saturation | +0.40 | refuted cross-shot |
+| H1 | Drive interruption in the primary circuit | −0.39 | weak/mixed |
+| H3 | Runaway-electron dominated phases | −0.43 | contradicted |
+| H7 | Measurement / processing artefact | −0.66 | contradicted |
+| H6 | Position excursion with limiter contact | — | inconclusive |
 
-### H1 — Drive interruption in the primary circuit *(leading candidate)*
+**H2 — repetitive minor disruptions / internal reconnection. Supported.**
+The current spikes up at 90 % of the events (Δl_i ≈ −0.07), and 13 % of the
+density is expelled per event. Both are what a crash does and neither is what
+a lost drive does. *Caveat:* #53740 ran without the Mirnov ring, so the
+tearing-mode precursor and its poloidal mode number could not be measured, and
+the band-passed loop voltage shows no growing precursor of its own. This is
+the one gap worth closing (§9).
 
-The current-drive bank is switched into the primary by thyristors. A thyristor
-conducts only while its current exceeds the holding value and cannot be turned
-off by the gate; as the 11.3 mF bank runs down late in the discharge the
-primary current is small and near its zero crossing, which is precisely where
-intermittent conduction, drop-out and re-triggering occur. Each non-conducting
-interval gives `dΦ/dt = 0` — a flat `U_loop = 0` floor — during which the
-plasma current freewheels through `L_p/R_p` and loses a little, then the drive
-returns.
+**H1 — drive interruption. Contradicted.** Three independent counts: the
+current spikes *upwards*, which a switched-off drive cannot do; the loop
+voltage goes genuinely negative rather than sitting on a floor (rail fraction
+7·10⁻⁴); and B_t shows no coherent step at the events.
 
-- **Predicts:** `R_in/R_pre ≈ 1`; a flat, clock-regular collapse train
-  (`period_cv < 0.15`); a hard floor rather than a noisy minimum
-  (`rail_fraction` high); no Mirnov precursor; Mirnov jumps in phase on all
-  coils (m = 0 pickup, `mirnov_common_mode_ratio > 1`); nothing happening on
-  H-alpha before the collapse; onset late, when the bank is nearly flat.
-- **Killed by:** a growing magnetic precursor, or `R_in/R_pre ≫ 1`.
-- **Cross-shot check:** the onset should track the CD bank charging voltage
-  `U_CD` (from the shot's `.setup` / `Production/Parameters`), not the clock.
+**H5 — core saturation / volt-second exhaustion. Refuted cross-shot.** If the
+onset were flux-limited, the delivered flux would cluster more tightly than
+the onset time. It does not: flux CV 0.147 against onset-time CV 0.118, a
+clustering ratio of **0.81**. The flux is a *worse* predictor than the clock,
+and both are far worse than I_p/I_p,max.
 
-### H2 — Repetitive minor disruptions / MHD relaxation
+**H3 — runaway electrons. Contradicted.** The naive resistance test does
+report an apparent collapse (`R_in/R_pre = 0.10`) — but that test assumes the
+current is freewheeling, and here it is *rising*. The test is now flagged
+invalid whenever dI_p/dt > 0 during the event, and the inductive spike explains
+the apparent resistance collapse with no runaway population needed. This was a
+genuine false positive on the first pass and is exactly why the validity guard
+exists.
 
-The textbook candidate for "current drops in steps": an m = 2/n = 1 tearing
-mode grows, crashes, flattens the current profile and expels particles and
-energy; the cycle repeats.
+**H7 — chamber-correction artefact. Contradicted, but it was close.** The
+correction swings by 0.82 kA per event. Redoing it with a chamber model that
+respects the vessel's own L/R (0.124 ms, comparable to the event duration)
+leaves the current excursion **larger**, not smaller
+(`dip_ratio_dyn_pub = 1.62`), and the excursion does not recover between events
+(`ip_recovery = −0.54`). The staircase is real lost plasma current.
 
-There is, however, a specific reason to doubt it *as the driver here*. A
-disruption raises the plasma resistance and reduces the secondary current,
-which makes the core flux change **faster**, not slower — the classic magnetic
-signature of a minor disruption on a core-mounted loop is a positive `U_loop`
-spike (plus a negative `I_p` spike), not a collapse to zero. So H2 predicts the
-wrong sign for the primary observation, and would more naturally explain a
-*response* at each event than the event itself.
+**H4 — radiative/recycling limit cycle. Not decidable here.** It scores +0.50
+purely on the ~1 ms period being in the right range; #53740 had no fast
+spectroscopy, so the decisive lead/lag of impurity radiation against the
+collapse could not be measured. Density does modulate strongly in phase with
+the cycle, so a radiative contribution to the *cooling* between crashes is
+plausible and untested.
 
-- **Predicts:** Mirnov precursor growing over a few hundred μs
-  (`precursor_ratio > 2`), coherent m ≈ 2 at ~5–20 kHz, `R_in/R_pre ≫ 1`,
-  H-alpha recycling flash *after* the onset, density expelled, hard X-rays.
-- **Killed by:** quiet Mirnov coils before each event, or `R_in/R_pre ≈ 1`.
+**H6 — position excursion. Not necessary.** #53740's radial and vertical
+stabilisation waveforms do ramp right through the onset, which looked
+suspicious. But across the candidates the radial drive at onset ranges from
+−11.3 to +11.8 with the widest scatter of any quantity examined
+(median 3.75, IQR 5.74, coefficient of variation 1.11), and in **8 of the 37
+shots it is exactly zero at onset** — the instability starts before the ramp
+begins. One shot (#53723) had current
+stabilisation switched off entirely and still shows it.
 
-### H3 — Runaway-electron dominated phases
+## 6. Where my pre-data prior was wrong
 
-If a runaway population carries a growing share of the current, the effective
-resistance collapses and the loop voltage needed to sustain the current falls
-towards zero; a loss event (mode, wall contact) dumps the runaways, the
-resistance and `U_loop` jump back, and the current steps down. Low density and
-late-discharge timing both favour it.
+Before the data was reachable I argued that, because U_loop is a *core*
+measurement and a plasma crash should spike it *upwards*, the leading
+candidates were circuit-side (H1/H5). The first half of that reasoning was
+right and the conclusion drawn from it was wrong: the crash spikes U_loop
+**downwards**, because the plasma current *increases* at constant flux and the
+extra secondary MMF opposes the core flux change. I had the sign of the
+back-reaction backwards. The cross-shot volt-second test I proposed as the
+decisive check for H5 did its job — it refuted the hypothesis it was built for.
 
-- **Predicts:** `R_in/R_pre ≪ 1`; scintillator/Timepix bursts at the recovery,
-  not at the onset; low `n_e`; `U_loop` recovery *overshooting* its envelope.
-- **Killed by:** quiet scintillators, or a high-density discharge.
+## 7. What is still open
 
-### H4 — Impurity-radiation / recycling limit cycle
+- **No Mirnov data on any of these shots.** The precursor mode number is the
+  single most valuable missing measurement: m = 2/n = 1 would settle "minor
+  disruption", m = 1/n = 1 would make it a sawtooth crash. `MHDring-TM` ran on
+  other shots — repeating this regime with it on stage is the obvious next run.
+- **No fast spectroscopy**, so H4's lead/lag test is untested.
+- **q_0 is not measured**, so "the profile finished penetrating" is an
+  inference from the I_p/I_p,max law, not a direct observation. A diamagnetic
+  loop (`Diamagnetism`, present on other shots) would give the stored energy
+  and constrain l_i independently.
+- The 37 candidates span only two sessions; a wider scan (`--since-days 365`)
+  would show whether the I_p/I_p,max law holds generally.
 
-Impurity influx raises radiated power, the edge cools, the current profile
-contracts, confinement drops, the influx is quenched, the plasma reheats — a
-thermal relaxation oscillation on the confinement/refuelling timescale
-(≳0.5 ms).
-
-- **Predicts:** C II / O I / N II rising **before** the loop-voltage drop
-  (`CII_514_onset_lag_ms < 0`), `R_in/R_pre > 1`, slow and somewhat irregular
-  periods.
-- **Killed by:** line emission that only ever follows the collapse.
-
-### H5 — Volt-second exhaustion / iron-core saturation
-
-GOLEM's transformer has an iron core with a finite flux swing. As the core
-approaches saturation its magnetising inductance collapses, the magnetising
-current surges, the bank voltage sags and `dΦ/dt` — hence `U_loop` — drops. As
-the flux falls back below the knee the core recovers and the voltage returns.
-That is a genuine relaxation oscillator, and it explains a *periodic* collapse
-train without any active electronics.
-
-- **Predicts:** onset set by the *flux already delivered* rather than by the
-  clock. This is the decisive and rather elegant cross-shot test: compute
-  `∫U_loop dt` up to the first collapse in every candidate shot and compare its
-  scatter with the scatter of the onset time. Tight flux clustering with
-  scattered onset times means the core is the culprit
-  (`analyze.volt_second_test()`, reported as `flux_clustering_ratio`).
-- **Killed by:** onsets that cluster in *time* while the delivered flux varies.
-
-### H6 — Position excursion with limiter contact
-
-A vertical or radial drift brings the column onto the limiter, cooling it and
-releasing wall material; the stabilisation system pushes it back and the cycle
-repeats.
-
-- **Predicts:** growth of the m = 1 component of the Mirnov ring before each
-  event (`ring_asymmetry_growth`), impurity lines leading H-alpha,
-  `PositionStabilization` actuator activity in step with the events.
-- **Killed by:** a quiet m = 1 component.
-
-### H7 — Measurement / processing artefact
-
-Two distinct versions, and the second is genuinely likely to contribute:
-
-1. *Digitiser clipping* of the loop-voltage channel — a dead-flat rail with no
-   scatter (`rail_fraction ≈ 1`, `in_event_std ≈ 0`). Easy to check against the
-   raw scope dump (`Shot.raw_das()`).
-2. *The chamber-current correction* (§1) writing part of the `I_p` staircase.
-   Since `τ_ch ≈ 0.12 ms` is comparable to the collapse duration, the resistive
-   correction cannot follow and mis-corrects at every edge, by up to
-   `U_env/R_chamber ≈ 0.5 kA`.
-
-- **Predicts (version 2):** the excursion largely disappears when the
-  correction is redone with an inductive chamber model
-  (`dip_ratio_dyn_pub ≪ 1`), and the current excursion recovers between events
-  rather than accumulating (`ip_recovery → 1`).
-- **Killed by:** a staircase that survives the re-correction, which would make
-  it real lost plasma current.
-
-## 6. Decision tree
-
-```
-                      R_in / R_pre  (resistance_test)
-                               |
-      ┌────────────────────────┼────────────────────────┐
-     ≈1                       ≫1                       ≪1
-      │                        │                        │
- circuit-side             plasma-side              runaway-side
-      │                        │                        │
- precursor_ratio?        precursor_ratio?         scintillators?
-   low → H1/H5            high → H2                burst at recovery → H3
-      │                    low  → H4/H6
- flux clustering
- across shots?
-   tight → H5
-   loose → H1
-```
-
-Run in parallel with the tree, on every shot: `dip_ratio_dyn_pub` and
-`rail_fraction`, to know how much of the `I_p` staircase is real (H7).
-
-## 7. How to get the answers
+## 8. Reproducing this
 
 ```bash
 pip install -r golem_instability/requirements.txt
 
-# the reference shot: figures + a full markdown report with the hypothesis table
 python -m golem_instability shot 53740 --outdir out/
-
-# find the other shots that do this, then report on the best candidates
-python -m golem_instability scan --from 53500 --to 53800 --analyse-top 5 --outdir out/
-
-# a wider trawl, e.g. the last year, sampling every 3rd shot
-python -m golem_instability scan --since-days 365 --step 3 --outdir out/
-
-# no network needed: validate the pipeline against synthetic shots of known cause
-python -m golem_instability selftest
+python -m golem_instability scan --from 53500 --to 53761 --outdir out/
+python -m golem_instability selftest        # offline pipeline validation
 ```
 
-The scan writes `scan.csv`, `scan_report.md` (including the volt-second test)
-and `scan_overview.png`; each analysed shot gets an overview, an event zoom, an
-event-triggered average, a statistics panel, a spectrogram, an events CSV and a
-markdown report ranking H1–H7 with the numbers behind each verdict.
+The scan writes `scan.csv`, `onset_conditions.csv`, `scan_report.md` (with the
+onset-criterion ranking and the volt-second test), `scan_overview.png` and
+`onset_criterion.png`. Each analysed shot gets an overview, an event zoom, an
+event-triggered average, a statistics panel, a spectrogram, a signal inventory,
+an events CSV and a markdown report ranking H1–H7 with the numbers behind each
+verdict.
 
-### Suggested order of work once the data is reachable
-
-1. `shot 53740` — read `R_ratio`, `rail_fraction`, `precursor_ratio` and
-   `dip_ratio_dyn_pub`. Those four numbers already split the tree.
-2. `scan` a few hundred neighbouring shots. The instability is expected to be a
-   session-level phenomenon, so look for clustering by `session_id` and by
-   `U_CD` rather than a uniform sprinkle.
-3. Run `volt_second_test` on the candidates (H5), and correlate the onset with
-   `U_CD`, `B_t`, gas species and pressure from the `.setup` files.
-4. Only then reach for the raw scope dumps, to confirm the `U_loop` floor is
-   physical and to look at the uncorrected Rogowski channel directly.
-
-## 8. Prior expectation
-
-Stated up front so it can be falsified rather than quietly confirmed: given
-that `U_loop` is a *core* measurement, that a plasma-side crash would spike it
-upwards rather than to zero, and that the onset is late in a discharge whose
-capacitor-driven, thyristor-switched primary is by then near its current zero,
-the leading candidates are **H1** (intermittent primary conduction) and **H5**
-(core saturation), which the cross-shot volt-second test separates. **H7.2**
-(the chamber-correction artefact) is expected to account for a significant
-fraction — possibly most — of the apparent `I_p` staircase, and must be
-quantified before the current loss is interpreted. The plasma-side mechanisms
-H2/H4 are expected to appear as *responses* to the collapse rather than its
-cause; if a Mirnov precursor is found growing before each event, that ordering
-is wrong and H2 moves to the front.
+Note the base URL is **https** — plain HTTP is blocked by some egress proxies
+while HTTPS works.
 
 ## 9. Sources
 
 - [Online experimentation at the GOLEM tokamak](https://golem.fjfi.cvut.cz/wiki/Education/library/paper.pdf) — machine parameters, diagnostic set, `U_loop` from a coil around the transformer core.
 - [Plasma current measurement using the Rogowski coil (GOLEM wiki)](http://golem.fjfi.cvut.cz/wiki/Diagnostics/Magnetic/RogowskiCoilArroundChamber/Theory/diagnostics_rogowski) — the chamber-current correction and `R_chamber = 9.7 mΩ`.
-- [Instructions for student measurements on the GOLEM tokamak](http://golem.fjfi.cvut.cz/wiki/TrainingCourses/Universities/BUTE_Budapest.hu/10/GOLEM_instructions.pdf) — `C_CD = 11.3 mF`, `U_CD ≤ 700 V`, thyristor switching, `C_B = 81 mF`.
-- [Remote operation of the GOLEM tokamak for fusion education](https://pure.mpg.de/rest/items/item_2381669_4/component/file_2418561/content) — capacitor-bank based supplies, remote control of the discharge.
-- [Investigation of turbulent transport at the edge of the GOLEM tokamak](https://arxiv.org/pdf/2502.10191) — operating ranges (`B_t < 0.5 T`, `I_p < 8 kA`, `τ_p < 25 ms`).
-- [An active feedback recovery technique from disruption events induced by m=2/n=1 tearing modes](https://arxiv.org/pdf/1503.00852) — minor-disruption phenomenology used for H2.
+- [Instructions for student measurements on the GOLEM tokamak](http://golem.fjfi.cvut.cz/wiki/TrainingCourses/Universities/BUTE_Budapest.hu/10/GOLEM_instructions.pdf) — `C_CD = 11.3 mF`, `U_CD ≤ 700 V`, thyristor switching.
+- [Investigation of turbulent transport at the edge of the GOLEM tokamak](https://arxiv.org/pdf/2502.10191) — operating ranges.
+- [An active feedback recovery technique from disruption events induced by m=2/n=1 tearing modes](https://arxiv.org/pdf/1503.00852) — minor-disruption phenomenology, including the positive I_p spike at a crash.
