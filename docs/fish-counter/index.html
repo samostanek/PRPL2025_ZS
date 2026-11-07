@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b1d26">
+  <title>Fish Motion Counter</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Fish Motion Counter</h1>
+    <p class="sub">Counts groups of moving pixels in a live camera feed. Everything runs on this device and nothing is uploaded.</p>
+  </header>
+
+  <main>
+    <section class="stage">
+      <!-- The raw video stays in the DOM (iOS needs that) but is not shown; frames are drawn on the canvas. -->
+      <video id="video" playsinline muted autoplay></video>
+      <canvas id="view" width="640" height="360" aria-label="Camera view with detected movement"></canvas>
+      <div id="placeholder" class="placeholder">
+        <p>Point the camera at the aquarium and keep the phone still, ideally on a stand.</p>
+        <button id="startBtn" class="primary">Start camera</button>
+        <label class="filebtn">or test with a video file
+          <input id="fileInput" type="file" accept="video/*">
+        </label>
+      </div>
+      <div id="roiHint" class="roi-hint" hidden>Drag over the area to analyse (for example, the aquarium glass only)</div>
+    </section>
+
+    <section class="counts" aria-live="polite">
+      <div class="count main">
+        <span class="label">Moving groups (smoothed)</span>
+        <span id="countSmooth" class="value">–</span>
+      </div>
+      <div class="count">
+        <span class="label">This frame</span>
+        <span id="countNow" class="value">–</span>
+      </div>
+      <div class="count">
+        <span class="label">Size-based estimate</span>
+        <span id="countEst" class="value">–</span>
+      </div>
+    </section>
+    <p id="status" class="status">Camera not started.</p>
+
+    <section class="toolbar">
+      <select id="cameraSelect" aria-label="Camera" hidden></select>
+      <button id="pauseBtn" disabled>Pause</button>
+      <button id="resetBtn" disabled>Reset background</button>
+      <button id="roiBtn" disabled>Select area</button>
+      <button id="roiClearBtn" disabled>Clear area</button>
+      <button id="recBtn" disabled>Start log</button>
+      <button id="csvBtn" disabled>Download CSV</button>
+    </section>
+
+    <details class="settings" open>
+      <summary>Detection settings</summary>
+      <div class="grid">
+        <label>Sensitivity threshold <output data-for="threshold"></output>
+          <input type="range" data-key="threshold" min="4" max="120" step="1">
+          <small>Minimum color change from the background that counts as motion. Raise it if water ripples or noise show up.</small>
+        </label>
+        <label>Minimum group size <output data-for="minArea"></output>
+          <input type="range" data-key="minArea" min="1" max="400" step="1">
+          <small>Groups smaller than this are ignored (pixels at 320 px analysis width).</small>
+        </label>
+        <label>Merge distance <output data-for="merge"></output>
+          <input type="range" data-key="merge" min="0" max="6" step="1">
+          <small>Joins nearby fragments, so one fish is not split into several groups.</small>
+        </label>
+        <label>Background adaptation <output data-for="learn"></output>
+          <input type="range" data-key="learn" min="0.002" max="0.2" step="0.002">
+          <small>How fast still objects fade into the background. Lower keeps slow fish visible for longer.</small>
+        </label>
+        <label>Smoothing (frames) <output data-for="smooth"></output>
+          <input type="range" data-key="smooth" min="1" max="60" step="1">
+          <small>The smoothed count is the median over this many frames.</small>
+        </label>
+        <label>Analysis width <output data-for="procWidth"></output>
+          <input type="range" data-key="procWidth" min="160" max="640" step="80">
+          <small>Higher finds smaller fish but runs slower.</small>
+        </label>
+        <label class="check"><input type="checkbox" data-key="showMask"> Show motion mask</label>
+        <label class="check"><input type="checkbox" data-key="showBoxes"> Show group boxes</label>
+      </div>
+      <button id="defaultsBtn" class="link">Restore defaults</button>
+    </details>
+
+    <details class="help">
+      <summary>How it works and tips</summary>
+      <ol>
+        <li>Each frame is scaled down and compared with a slowly updating <em>background model</em> of the scene.</li>
+        <li>Pixels whose color differs by more than the threshold are marked as moving. Isolated noise pixels are removed, and nearby fragments are merged.</li>
+        <li>Connected groups of moving pixels are counted. Groups below the minimum size are ignored.</li>
+        <li>The <strong>size-based estimate</strong> compares each group with the typical group size. Two fish swimming together count as 2 rather than 1.</li>
+      </ol>
+      <ul>
+        <li>Keep the phone fixed. Any camera movement looks like motion everywhere, and the background then resets automatically.</li>
+        <li>Use <em>Select area</em> to exclude reflections, the frame and the room outside the glass.</li>
+        <li>Fish that stop moving fade into the background over time, and only <em>moving</em> fish are counted.</li>
+        <li>Steady, even lighting gives the best results. Turn off pumps or bubblers if their bubbles are counted.</li>
+      </ul>
+    </details>
+  </main>
+
+  <footer>
+    <span id="fps"></span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
