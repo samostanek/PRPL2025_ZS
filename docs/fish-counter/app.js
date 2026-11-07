@@ -10,6 +10,8 @@
  *   4. background update (running average; slower where motion is detected)
  *   5. morphological opening (remove speckles) + closing (merge fragments)
  *   6. 8-connected component labelling -> groups, filtered by minimum area
+ *   7. tracking (tracker.js): groups are linked over time into fish with IDs and paths;
+ *      short-lived or static groups are discarded, hidden / out-of-view fish are remembered
  */
 
 const $ = (id) => document.getElementById(id);
@@ -19,17 +21,23 @@ const DEFAULTS = {
   minArea: 20,
   merge: 2,
   learn: 0.02,
-  smooth: 15,
   procWidth: 320,
+  confirmTime: 0.5,
+  hiddenMemory: 20,
+  outMemory: 120,
+  trailSeconds: 10,
   showMask: true,
+  showTracks: true,
   showBoxes: true,
 };
+const TRACKER_KEYS = ['confirmTime', 'hiddenMemory', 'outMemory', 'trailSeconds'];
 const STORE_KEY = 'fish-counter-settings-v1';
 const WARMUP_FRAMES = 45;          // frames used to build the initial background
 const WARM_STEP = 3;               // every 3rd warm-up frame is kept -> 15 samples
 const WARM_SAMPLES = Math.ceil(WARMUP_FRAMES / WARM_STEP);
 const GLOBAL_CHANGE_FRACTION = 0.4; // more motion than this => camera moved / light changed
 const MAX_VIEW_WIDTH = 960;
+const STATIC_ABSORB = 0.15;        // background learning rate inside static, unconfirmed groups
 
 // ---------- settings ----------
 const settings = loadSettings();
@@ -58,9 +66,12 @@ const ui = {
   placeholder: $('placeholder'),
   stage: document.querySelector('.stage'),
   status: $('status'),
+  countTotal: $('countTotal'),
+  countVisible: $('countVisible'),
+  countHidden: $('countHidden'),
+  countOut: $('countOut'),
   countNow: $('countNow'),
-  countSmooth: $('countSmooth'),
-  countEst: $('countEst'),
+  events: $('events'),
   fps: $('fps'),
   cameraSelect: $('cameraSelect'),
   roiHint: $('roiHint'),
@@ -79,16 +90,27 @@ let roi = null;                // {x0,y0,x1,y1} normalised 0..1, or null for the
 let roiDrawing = null;
 let roiMode = false;
 let blobs = [];
-let countHistory = [];
-let areaHistory = [];
-let lastResult = { now: 0, smooth: 0, est: 0, fg: 0 };
+let fishAreaHistory = [];      // areas of groups that belong to confirmed fish
+let fishSize = 8;              // typical fish length in analysis pixels
+let lastProcAt = 0;
+let lastResult = { raw: 0, fg: 0, warming: true };
+const tracker = new FishTracker(trackerOptions());
+let recentEvents = [];
 let globalChangeUntil = 0;
 let lastDims = { w: 0, h: 0 };
 let fpsFrames = 0, fpsSince = performance.now();
 let wakeLock = null;
-let log = [];                  // logged rows (one per second while logging)
+let log = [];                  // count rows (one per second while logging)
+let pathLog = [];              // fish positions (10 per second while logging)
+const PATH_LOG_MAX = 1000000;
 let logging = false;
-let logStart = 0, lastLogAt = 0;
+let logStart = 0, lastLogAt = 0, lastPathLogAt = 0;
+
+function trackerOptions() {
+  const o = {};
+  TRACKER_KEYS.forEach((k) => { o[k] = settings[k]; });
+  return o;
+}
 
 function allocate() {
   const vw = video.videoWidth, vh = video.videoHeight;
@@ -114,13 +136,19 @@ function allocate() {
   view.width = Math.round(vw * scale);
   view.height = Math.round(vh * scale);
   resetBackground();
+  resetTracking();
   return true;
 }
 
 function resetBackground() {
   frameCount = 0;
-  countHistory = [];
-  areaHistory = [];
+}
+
+function resetTracking() {
+  tracker.reset();
+  fishAreaHistory = [];
+  recentEvents = [];
+  renderEvents();
 }
 
 // ---------- image processing ----------
@@ -258,7 +286,7 @@ function processFrame() {
     frameCount++;
     if (frameCount === WARMUP_FRAMES) medianBackground();
     blobs = [];
-    lastResult = { now: 0, smooth: 0, est: 0, fg: 0, warming: true };
+    lastResult = { raw: 0, fg: 0, warming: true };
     return;
   }
 
@@ -295,7 +323,7 @@ function processFrame() {
     globalChangeUntil = performance.now() + 2000;
     resetBackground();
     blobs = [];
-    lastResult = { now: 0, smooth: 0, est: 0, fg: 0, warming: true };
+    lastResult = { raw: 0, fg: 0, warming: true };
     return;
   }
 
@@ -326,20 +354,63 @@ function processFrame() {
   const minArea = Math.max(1, Math.round(settings.minArea * (W / 320) * (W / 320)));
   blobs = findBlobs(mask, minArea);
 
-  const now = blobs.length;
-  countHistory.push(now);
-  while (countHistory.length > settings.smooth) countHistory.shift();
+  // 7. tracking
+  const t = performance.now();
+  const dt = lastProcAt ? (t - lastProcAt) / 1000 : 1 / 30;
+  lastProcAt = t;
+  const counts = tracker.update(blobs, dt, { x0, y0, x1, y1 }, fishSize);
 
-  for (const b of blobs) areaHistory.push(b.area);
-  while (areaHistory.length > 600) areaHistory.shift();
-  const typical = median(areaHistory);
-  let est = 0;
-  for (const b of blobs) {
-    b.units = typical > 0 ? Math.max(1, Math.round(b.area / typical)) : 1;
-    est += b.units;
+  // Groups that stay put without ever becoming a fish (a "ghost" of a fish that sat in
+  // the start-up background, a resting snail, a reflection) are absorbed quickly into
+  // the background so they stop producing detections.
+  for (const c of tracker.staticCandidates(fishSize)) {
+    const b = c.box;
+    const bx0 = Math.max(0, b.minX - 2), bx1 = Math.min(W - 1, b.maxX + 2);
+    const by0 = Math.max(0, b.minY - 2), by1 = Math.min(H - 1, b.maxY + 2);
+    for (let y = by0; y <= by1; y++) {
+      for (let x = bx0; x <= bx1; x++) {
+        const i = y * W + x, j = i * 3, k = i * 4;
+        bg[j] += STATIC_ABSORB * (px[k] - bg[j]);
+        bg[j + 1] += STATIC_ABSORB * (px[k + 1] - bg[j + 1]);
+        bg[j + 2] += STATIC_ABSORB * (px[k + 2] - bg[j + 2]);
+      }
+    }
   }
+  for (const e of tracker.events) {
+    if (e.minor) continue; // brief losses of track would flood the list
+    recentEvents.unshift(e);
+  }
+  if (tracker.events.length) { recentEvents.length = Math.min(recentEvents.length, 6); renderEvents(); }
 
-  lastResult = { now, smooth: Math.round(median(countHistory)), est, fg: fgFraction, warming: false };
+  // Typical fish size, learnt from groups that belong to confirmed fish.
+  for (const b of blobs) if (b.trackId) fishAreaHistory.push(b.area);
+  while (fishAreaHistory.length > 600) fishAreaHistory.shift();
+  const minSize = 6 * (W / 320);
+  fishSize = fishAreaHistory.length >= 20
+    ? Math.max(minSize, 1.4 * Math.sqrt(median(fishAreaHistory)))
+    : Math.max(minSize, 1.4 * Math.sqrt(minArea * 4));
+
+  lastResult = Object.assign({ raw: blobs.length, fg: fgFraction, warming: false }, counts);
+}
+
+function renderEvents() {
+  ui.events.textContent = '';
+  for (const e of recentEvents) {
+    const li = document.createElement('li');
+    li.textContent = `${formatClock(e.t)}  Fish #${e.id} ${EVENT_TEXT[e.type] || e.type}`;
+    ui.events.appendChild(li);
+  }
+}
+const EVENT_TEXT = {
+  'new fish': 'detected (new fish)',
+  'left view': 'left the view',
+  're-entered': 'came back into view',
+  'reappeared': 'reappeared after hiding',
+  'forgotten': 'forgotten (not seen for too long)',
+};
+function formatClock(sec) {
+  const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
 }
 
 // ---------- drawing ----------
@@ -376,27 +447,89 @@ function draw() {
     vctx.restore();
   }
 
+  const lw = Math.max(2, vw / 400);
+  const fontPx = Math.max(12, Math.round(vw / 45));
+
+  // Candidates (not counted yet): thin grey boxes.
   if (settings.showBoxes) {
     vctx.save();
-    vctx.lineWidth = Math.max(2, vw / 400);
-    vctx.font = `bold ${Math.max(12, Math.round(vw / 45))}px system-ui, sans-serif`;
-    vctx.textBaseline = 'bottom';
-    blobs.forEach((b, idx) => {
-      const x = b.minX * sx, y = b.minY * sy;
-      const w = (b.maxX - b.minX + 1) * sx, h = (b.maxY - b.minY + 1) * sy;
-      vctx.strokeStyle = b.units > 1 ? '#ff9f1c' : '#ff3d6e';
-      vctx.strokeRect(x, y, w, h);
-      const text = b.units > 1 ? `${idx + 1} (×${b.units})` : `${idx + 1}`;
-      const tw = vctx.measureText(text).width + 8;
-      const th = parseInt(vctx.font.match(/(\d+)px/)[1], 10) + 4;
-      const ty = y - th < 0 ? y + h + th : y;
-      vctx.fillStyle = vctx.strokeStyle;
-      vctx.fillRect(x, ty - th, tw, th);
-      vctx.fillStyle = '#fff';
-      vctx.fillText(text, x + 4, ty - 2);
-    });
+    vctx.setLineDash([4, 4]);
+    vctx.lineWidth = 1;
+    vctx.strokeStyle = 'rgba(255,255,255,0.7)';
+    for (const t of tracker.tracks) {
+      if (t.state !== 'candidate' || t.misses) continue;
+      const b = t.box;
+      vctx.strokeRect(b.minX * sx, b.minY * sy, (b.maxX - b.minX + 1) * sx, (b.maxY - b.minY + 1) * sy);
+    }
     vctx.restore();
   }
+
+  if (settings.showTracks) {
+    vctx.save();
+    vctx.lineCap = 'round';
+    vctx.lineJoin = 'round';
+    vctx.font = `bold ${fontPx}px system-ui, sans-serif`;
+    vctx.textBaseline = 'bottom';
+    for (const t of tracker.tracks) {
+      if (!t.id) continue;
+      const color = `hsl(${t.hue}, 95%, 60%)`;
+      const faded = t.state !== 'visible';
+
+      // path: solid where observed, dashed across gaps (hidden / out of view)
+      vctx.globalAlpha = faded ? 0.5 : 0.9;
+      vctx.strokeStyle = color;
+      vctx.lineWidth = lw;
+      for (const dashed of [false, true]) {
+        vctx.setLineDash(dashed ? [6, 6] : []);
+        vctx.beginPath();
+        for (let i = 1; i < t.path.length; i++) {
+          if (!!t.path[i].gap !== dashed) continue;
+          vctx.moveTo(t.path[i - 1].x * sx, t.path[i - 1].y * sy);
+          vctx.lineTo(t.path[i].x * sx, t.path[i].y * sy);
+        }
+        vctx.stroke();
+      }
+      vctx.setLineDash([]);
+      vctx.globalAlpha = 1;
+
+      if (t.state === 'visible') {
+        const b = t.box;
+        const x = b.minX * sx, y = b.minY * sy;
+        const w = (b.maxX - b.minX + 1) * sx, h = (b.maxY - b.minY + 1) * sy;
+        vctx.strokeStyle = color;
+        vctx.strokeRect(x, y, w, h);
+        drawLabel(`#${t.id}`, x, y, h, color, fontPx);
+      } else if (t.state === 'hidden') {
+        const r = Math.max(8, fishSize * sx * 0.7);
+        vctx.globalAlpha = 0.85;
+        vctx.strokeStyle = color;
+        vctx.setLineDash([4, 4]);
+        vctx.beginPath();
+        vctx.arc(t.x * sx, t.y * sy, r, 0, Math.PI * 2);
+        vctx.stroke();
+        vctx.setLineDash([]);
+        drawLabel(`#${t.id} hidden`, t.x * sx - r, t.y * sy - r, 2 * r, color, fontPx);
+        vctx.globalAlpha = 1;
+      } else if (t.state === 'out') {
+        const x = Math.min(vw - 60, Math.max(0, t.exitX * sx - 20));
+        const y = Math.min(vh - 4, Math.max(fontPx + 8, t.exitY * sy));
+        vctx.globalAlpha = 0.75;
+        drawLabel(`#${t.id} out`, x, y, 0, color, fontPx);
+        vctx.globalAlpha = 1;
+      }
+    }
+    vctx.restore();
+  }
+}
+
+function drawLabel(text, x, y, h, color, fontPx) {
+  const tw = vctx.measureText(text).width + 8;
+  const th = fontPx + 4;
+  const ty = y - th < 0 ? y + h + th : y;
+  vctx.fillStyle = color;
+  vctx.fillRect(x, ty - th, tw, th);
+  vctx.fillStyle = '#05141b';
+  vctx.fillText(text, x + 4, ty - 2);
 }
 
 // ---------- main loop ----------
@@ -419,31 +552,48 @@ function loop() {
   fpsFrames++;
   const t = performance.now();
   if (t - fpsSince >= 1000) {
-    ui.fps.textContent = `${Math.round(fpsFrames * 1000 / (t - fpsSince))} fps · analysis ${W}×${H}`;
+    const st = tracker.stats;
+    ui.fps.textContent = `${Math.round(fpsFrames * 1000 / (t - fpsSince))} fps · analysis ${W}×${H} · ` +
+      `fish IDs created ${st.created} · re-identified ${st.reidentified} · false detections discarded ${st.discarded}`;
     fpsFrames = 0; fpsSince = t;
   }
-  if (logging && !lastResult.warming && t - lastLogAt >= 1000) {
-    lastLogAt = t;
-    log.push([new Date().toISOString(), ((t - logStart) / 1000).toFixed(1), lastResult.now, lastResult.smooth, lastResult.est]);
-    $('recBtn').textContent = `Stop log (${log.length})`;
+  if (logging && !lastResult.warming) {
+    const elapsed = ((t - logStart) / 1000).toFixed(1);
+    if (t - lastLogAt >= 1000) {
+      lastLogAt = t;
+      const r = lastResult;
+      log.push([new Date().toISOString(), elapsed, r.raw, r.visible, r.hidden, r.out, r.total]);
+      $('recBtn').textContent = `Stop log (${log.length} s)`;
+    }
+    if (t - lastPathLogAt >= 100 && pathLog.length < PATH_LOG_MAX) {
+      lastPathLogAt = t;
+      for (const tr of tracker.tracks) {
+        if (!tr.id || tr.state === 'out') continue;
+        pathLog.push([elapsed, tr.id, tr.state, (tr.x / W).toFixed(4), (tr.y / H).toFixed(4)]);
+      }
+    }
   }
 }
 function updateReadout() {
   const r = lastResult;
   if (r.warming) {
-    ui.countNow.textContent = ui.countSmooth.textContent = ui.countEst.textContent = '…';
+    ui.countTotal.textContent = ui.countVisible.textContent = ui.countHidden.textContent =
+      ui.countOut.textContent = ui.countNow.textContent = '…';
     setStatus(`Learning the background (${Math.min(frameCount, WARMUP_FRAMES)}/${WARMUP_FRAMES}). Keep the camera still.`);
     return;
   }
-  ui.countNow.textContent = r.now;
-  ui.countSmooth.textContent = r.smooth;
-  ui.countEst.textContent = r.est;
+  ui.countTotal.textContent = r.total;
+  ui.countVisible.textContent = r.visible;
+  ui.countHidden.textContent = r.hidden;
+  ui.countOut.textContent = r.out;
+  ui.countNow.textContent = r.raw;
   if (performance.now() < globalChangeUntil) {
     setStatus('Large change detected (camera moved or lighting changed). Re-learning the background…', true);
   } else if (paused) {
     setStatus('Paused.');
   } else {
-    setStatus(`Moving area: ${(r.fg * 100).toFixed(1)} % of the analysed region.`);
+    const cand = r.candidates ? ` · ${r.candidates} unconfirmed detection${r.candidates > 1 ? 's' : ''}` : '';
+    setStatus(`Moving area: ${(r.fg * 100).toFixed(1)} % of the analysed region${cand}.`);
   }
 }
 
@@ -571,8 +721,7 @@ view.addEventListener('pointerup', () => {
   roiDrawing = null;
   if (r.x1 - r.x0 > 0.03 && r.y1 - r.y0 > 0.03) {
     roi = r;
-    countHistory = [];
-    areaHistory = [];
+    resetTracking();
   }
   setRoiMode(false);
   if (paused) draw();
@@ -585,28 +734,37 @@ function toggleLog() {
     logging = false;
     btn.textContent = `Start new log (${log.length} rows kept)`;
     $('csvBtn').disabled = log.length === 0;
+    $('pathsBtn').disabled = pathLog.length === 0;
     return;
   }
   log = [];
+  pathLog = [];
   logging = true;
   logStart = performance.now();
   lastLogAt = 0;
-  btn.textContent = 'Stop log (0)';
+  lastPathLogAt = 0;
+  btn.textContent = 'Stop log (0 s)';
   $('csvBtn').disabled = true;
+  $('pathsBtn').disabled = true;
 }
 
-function downloadCsv() {
-  if (!log.length) return;
-  const header = 'timestamp,elapsed_s,count_frame,count_smoothed,count_size_estimate\n';
-  const body = log.map((r) => r.join(',')).join('\n');
-  const blob = new Blob([header + body + '\n'], { type: 'text/csv' });
+function saveCsv(name, header, rows) {
+  const body = rows.map((r) => r.join(',')).join('\n');
+  const blob = new Blob([header + '\n' + body + '\n'], { type: 'text/csv' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `fish-count-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
+  a.download = `${name}-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
   document.body.appendChild(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+function downloadCsv() {
+  if (log.length) saveCsv('fish-counts', 'timestamp,elapsed_s,raw_groups,visible,hidden,out_of_view,total_fish', log);
+}
+function downloadPaths() {
+  // x, y are fractions of the analysed frame (0..1, origin top-left)
+  if (pathLog.length) saveCsv('fish-paths', 'elapsed_s,fish_id,state,x,y', pathLog);
 }
 
 // ---------- settings UI ----------
@@ -615,6 +773,8 @@ function formatSetting(key, v) {
   if (key === 'minArea') return `${v} px`;
   if (key === 'procWidth') return `${v} px`;
   if (key === 'merge') return `${v} px`;
+  if (key === 'confirmTime') return `${Number(v).toFixed(1)} s`;
+  if (key === 'hiddenMemory' || key === 'outMemory' || key === 'trailSeconds') return `${v} s`;
   return String(v);
 }
 function syncSettingsUI() {
@@ -632,13 +792,14 @@ document.querySelectorAll('[data-key]').forEach((el) => {
     settings[key] = el.type === 'checkbox' ? el.checked : Number(el.value);
     const out = document.querySelector(`output[data-for="${key}"]`);
     if (out) out.textContent = formatSetting(key, settings[key]);
-    if (key === 'smooth') countHistory = countHistory.slice(-settings.smooth);
+    if (TRACKER_KEYS.includes(key)) tracker.setOptions(trackerOptions());
     saveSettings();
     if (paused && W) draw();
   });
 });
 $('defaultsBtn').addEventListener('click', () => {
   Object.assign(settings, DEFAULTS);
+  tracker.setOptions(trackerOptions());
   saveSettings();
   syncSettingsUI();
 });
@@ -653,11 +814,12 @@ $('pauseBtn').addEventListener('click', () => {
   if (video.src && !video.srcObject) { if (paused) video.pause(); else video.play(); }
   if (paused) setStatus('Paused.');
 });
-$('resetBtn').addEventListener('click', () => { resetBackground(); globalChangeUntil = 0; });
+$('resetBtn').addEventListener('click', () => { resetBackground(); resetTracking(); globalChangeUntil = 0; });
 $('roiBtn').addEventListener('click', () => setRoiMode(!roiMode));
-$('roiClearBtn').addEventListener('click', () => { roi = null; countHistory = []; areaHistory = []; if (paused) draw(); });
+$('roiClearBtn').addEventListener('click', () => { roi = null; resetTracking(); if (paused) draw(); });
 $('recBtn').addEventListener('click', toggleLog);
 $('csvBtn').addEventListener('click', downloadCsv);
+$('pathsBtn').addEventListener('click', downloadPaths);
 
 syncSettingsUI();
 if (!window.isSecureContext) {

@@ -10,7 +10,7 @@
 <body>
   <header>
     <h1>Fish Motion Counter</h1>
-    <p class="sub">Counts groups of moving pixels in a live camera feed. Everything runs on this device and nothing is uploaded.</p>
+    <p class="sub">Detects moving fish in a live camera feed, tracks each one's path and keeps counting fish that hide or swim out of view. Everything runs on this device and nothing is uploaded.</p>
   </header>
 
   <main>
@@ -30,28 +30,38 @@
 
     <section class="counts" aria-live="polite">
       <div class="count main">
-        <span class="label">Moving groups (smoothed)</span>
-        <span id="countSmooth" class="value">–</span>
+        <span class="label">Fish (tracked)</span>
+        <span id="countTotal" class="value">–</span>
       </div>
       <div class="count">
-        <span class="label">This frame</span>
+        <span class="label">Visible</span>
+        <span id="countVisible" class="value">–</span>
+      </div>
+      <div class="count">
+        <span class="label">Hidden</span>
+        <span id="countHidden" class="value">–</span>
+      </div>
+      <div class="count">
+        <span class="label">Out of view</span>
+        <span id="countOut" class="value">–</span>
+      </div>
+      <div class="count">
+        <span class="label">Raw moving groups</span>
         <span id="countNow" class="value">–</span>
-      </div>
-      <div class="count">
-        <span class="label">Size-based estimate</span>
-        <span id="countEst" class="value">–</span>
       </div>
     </section>
     <p id="status" class="status">Camera not started.</p>
+    <ul id="events" class="events" aria-label="Recent tracking events"></ul>
 
     <section class="toolbar">
       <select id="cameraSelect" aria-label="Camera" hidden></select>
       <button id="pauseBtn" disabled>Pause</button>
-      <button id="resetBtn" disabled>Reset background</button>
+      <button id="resetBtn" disabled>Reset</button>
       <button id="roiBtn" disabled>Select area</button>
       <button id="roiClearBtn" disabled>Clear area</button>
       <button id="recBtn" disabled>Start log</button>
-      <button id="csvBtn" disabled>Download CSV</button>
+      <button id="csvBtn" disabled>Counts CSV</button>
+      <button id="pathsBtn" disabled>Paths CSV</button>
     </section>
 
     <details class="settings" open>
@@ -73,16 +83,32 @@
           <input type="range" data-key="learn" min="0.002" max="0.2" step="0.002">
           <small>How fast still objects fade into the background. Lower keeps slow fish visible for longer.</small>
         </label>
-        <label>Smoothing (frames) <output data-for="smooth"></output>
-          <input type="range" data-key="smooth" min="1" max="60" step="1">
-          <small>The smoothed count is the median over this many frames.</small>
-        </label>
         <label>Analysis width <output data-for="procWidth"></output>
           <input type="range" data-key="procWidth" min="160" max="640" step="80">
           <small>Higher finds smaller fish but runs slower.</small>
         </label>
         <label class="check"><input type="checkbox" data-key="showMask"> Show motion mask</label>
-        <label class="check"><input type="checkbox" data-key="showBoxes"> Show group boxes</label>
+      </div>
+      <h3>Tracking</h3>
+      <div class="grid">
+        <label>Confirm a fish after <output data-for="confirmTime"></output>
+          <input type="range" data-key="confirmTime" min="0.2" max="3" step="0.1">
+          <small>A new group must be seen this long, and must swim at least half a fish length, before it counts. Anything that appears and disappears sooner is ignored.</small>
+        </label>
+        <label>Remember hidden fish for <output data-for="hiddenMemory"></output>
+          <input type="range" data-key="hiddenMemory" min="2" max="300" step="1">
+          <small>A fish lost <em>inside</em> the view (behind a plant or rock, or resting) stays counted this long.</small>
+        </label>
+        <label>Remember fish out of view for <output data-for="outMemory"></output>
+          <input type="range" data-key="outMemory" min="5" max="900" step="5">
+          <small>A fish that swims out through the edge stays counted this long, and is re-identified when a fish swims back in.</small>
+        </label>
+        <label>Path length <output data-for="trailSeconds"></output>
+          <input type="range" data-key="trailSeconds" min="0" max="120" step="1">
+          <small>How much of each fish's path is drawn.</small>
+        </label>
+        <label class="check"><input type="checkbox" data-key="showTracks"> Show fish IDs and paths</label>
+        <label class="check"><input type="checkbox" data-key="showBoxes"> Show unconfirmed detections</label>
       </div>
       <button id="defaultsBtn" class="link">Restore defaults</button>
     </details>
@@ -91,15 +117,20 @@
       <summary>How it works and tips</summary>
       <ol>
         <li>Each frame is scaled down and compared with a slowly updating <em>background model</em> of the scene.</li>
-        <li>Pixels whose color differs by more than the threshold are marked as moving. Isolated noise pixels are removed, and nearby fragments are merged.</li>
-        <li>Connected groups of moving pixels are counted. Groups below the minimum size are ignored.</li>
-        <li>The <strong>size-based estimate</strong> compares each group with the typical group size. Two fish swimming together count as 2 rather than 1.</li>
+        <li>Pixels whose color differs by more than the threshold are marked as moving. Isolated noise pixels are removed, and nearby fragments are merged into groups.</li>
+        <li><strong>Tracking</strong> links groups from frame to frame, predicting where each fish will be from its speed and direction.</li>
+        <li>A new group is only an <em>unconfirmed detection</em> (thin dashed box) until it has persisted and actually moved. Flickers, reflections and noise that appear and disappear are discarded.</li>
+        <li>Confirmed fish get an ID, a color and a path. If a fish is lost <em>inside</em> the view, it is counted as <strong>hidden</strong> (dashed circle) at its last position. If it swims out through an <em>edge</em>, it is counted as <strong>out of view</strong>.</li>
+        <li>When a fish appears again near where a hidden fish was lost, or enters through an edge while fish are out of view, it gets the old ID back instead of a new one. The dashed part of a path shows the gap.</li>
+        <li><strong>Fish (tracked)</strong> = visible + hidden + out of view. Fish not seen for longer than the memory settings are dropped.</li>
       </ol>
       <ul>
-        <li>Keep the phone fixed. Any camera movement looks like motion everywhere, and the background then resets automatically.</li>
-        <li>Use <em>Select area</em> to exclude reflections, the frame and the room outside the glass.</li>
-        <li>Fish that stop moving fade into the background over time, and only <em>moving</em> fish are counted.</li>
-        <li>Steady, even lighting gives the best results. Turn off pumps or bubblers if their bubbles are counted.</li>
+        <li>Keep the phone fixed. Any camera movement looks like motion everywhere, and the background then resets automatically. Fish being tracked are remembered during the reset.</li>
+        <li>Use <em>Select area</em> to exclude reflections, the frame and the room outside the glass. The edges of the selected area count as the edges of the view.</li>
+        <li>If one fish is counted twice after hiding, increase <em>Remember hidden fish</em>. If the total stays too high after fish have really gone, decrease it.</li>
+        <li>Fish cannot be told apart by appearance. When two fish cross or swap places while hidden, their IDs can swap, but the total is unaffected.</li>
+        <li>A continuous stream of bubbles moves like a fish and can be tracked. Exclude bubblers with <em>Select area</em>.</li>
+        <li><em>Paths CSV</em> holds each fish's position 10 times per second while the log runs, with x and y as fractions of the frame (0 to 1).</li>
       </ul>
     </details>
   </main>
@@ -108,6 +139,7 @@
     <span id="fps"></span>
   </footer>
 
+  <script src="tracker.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
